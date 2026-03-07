@@ -63,3 +63,9 @@ fastlane/test_output
 
 .claude/settings.local.json
 .claude/memory/
+
+# Funz2.0
+.env
+config/secrets.yaml
+*.o
+*.d

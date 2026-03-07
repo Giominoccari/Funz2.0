@@ -1,0 +1,21 @@
+server:
+  port: 8080
+  maxConnections: 200
+
+pipeline:
+  gridSpacingMeters: 500
+  batchSize: 5000
+  tileZoomMin: 6
+  tileZoomMax: 12
+  scoringWeights:
+    forest: 0.30
+    rain14d: 0.25
+    temperature: 0.20
+    altitude: 0.15
+    soil: 0.10
+
+map:
+  tileSignedUrlTtlSeconds: 3600
+  tileRetentionDays: 90
+  freeMaxZoom: 9
+  proMaxZoom: 12
