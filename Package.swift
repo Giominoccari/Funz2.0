@@ -35,13 +35,13 @@ let package = Package(
                 .product(name: "JWTKit", package: "jwt-kit"),
                 .product(name: "Logging", package: "swift-log"),
             ],
-            path: "Sources/App"
+            path: "Sources"
         ),
         .testTarget(
             name: "AppTests",
             dependencies: [
                 .target(name: "App"),
-                .product(name: "XCTVapor", package: "vapor"),
+                .product(name: "VaporTesting", package: "vapor"),
             ],
             path: "Tests"
         ),

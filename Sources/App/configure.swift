@@ -1,5 +1,6 @@
 import Fluent
 import FluentPostgresDriver
+import JWTKit
 import Logging
 import Redis
 import Vapor
@@ -22,6 +23,21 @@ func configure(_ app: Application) async throws {
     }
     app.redis.configuration = try RedisConfiguration(url: redisURL)
     logger.info("Redis configured")
+
+    // JWT RS256
+    guard let jwtPrivateKeyPEM = Environment.get("JWT_PRIVATE_KEY") else {
+        logger.critical("JWT_PRIVATE_KEY environment variable is not set")
+        fatalError("Missing required environment variable: JWT_PRIVATE_KEY")
+    }
+    let rsaKey = try Insecure.RSA.PrivateKey(pem: jwtPrivateKeyPEM)
+    app.jwtKeys = await JWTKeyCollection().add(rsa: rsaKey, digestAlgorithm: .sha256)
+    logger.info("JWT RS256 configured")
+
+    // Modules
+    try AuthModule.configure(app)
+
+    // Migrations (auto-migrate in development)
+    try await app.autoMigrate()
 
     // Routes
     try routes(app)

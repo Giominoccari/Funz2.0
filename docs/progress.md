@@ -7,7 +7,7 @@ Stato avanzamento rispetto alle fasi definite in `architecture.md`.
 ## MVP (mese 1-2)
 
 - [x] Setup progetto Vapor + Docker Compose locale (Postgres + Redis)
-- [ ] AuthModule completo (register, login, JWT, refresh)
+- [x] AuthModule completo (register, login, JWT, refresh)
 - [ ] UserModule base (profilo, placeholder foto)
 - [ ] Pipeline manuale con dati meteo mock e griglia ridotta (provincia test)
 - [ ] Tile statici caricati a mano su S3
@@ -49,4 +49,15 @@ Usato il pattern `@main enum Entrypoint` con `Application.make()` e `app.execute
 
 ### Struttura monolite modulare
 
-Cartelle `Modules/`, `Pipeline/`, `Core/` create con `.gitkeep` per mantenere la struttura in git. Nessun codice applicativo ancora presente — solo lo scaffold e l'endpoint `/health`.
+Il target SPM `App` ha `path: "Sources"` — compila tutto sotto `Sources/`. La struttura segue CLAUDE.md: `Sources/App/` (entrypoint, configure, routes), `Sources/Modules/`, `Sources/Pipeline/`, `Sources/Core/`. Cartelle future hanno `.gitkeep` come placeholder.
+
+### AuthModule (2026-03-07)
+
+Implementato il modulo di autenticazione completo:
+- **Endpoints**: `POST /auth/register`, `/auth/login`, `/auth/refresh`, `/auth/apple` (stub 501)
+- **JWT RS256**: payload con claims sub/iss/iat/exp/email, lifetime 15 min. Chiave RSA da env var `JWT_PRIVATE_KEY`
+- **Refresh token**: opaco (32 byte random, base64url), SHA-256 hash salvato in DB, rotazione ad ogni uso, lifetime 30 giorni
+- **Modelli Fluent**: `User` (email, password_hash bcrypt, apple_user_id) + `RefreshToken` (token_hash, expires_at, revoked_at)
+- **Middleware JWT**: `JWTAuthMiddleware` pronto per proteggere route future (User, Map, etc.)
+- **Test target**: usa `VaporTesting` (non XCTVapor) con Swift Testing framework
+- **Package.swift**: aggiunto `VaporTesting` al test target al posto di `XCTVapor`
