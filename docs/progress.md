@@ -9,7 +9,7 @@ Stato avanzamento rispetto alle fasi definite in `architecture.md`.
 - [x] Setup progetto Vapor + Docker Compose locale (Postgres + Redis)
 - [x] AuthModule completo (register, login, JWT, refresh)
 - [x] UserModule base (profilo, placeholder foto)
-- [ ] Pipeline manuale con dati meteo mock e griglia ridotta (provincia test)
+- [x] Pipeline manuale con dati meteo mock e griglia ridotta (provincia test)
 - [ ] Tile statici caricati a mano su S3
 - [ ] App iOS che visualizza tile su MapLibre
 
@@ -71,3 +71,14 @@ Implementato il modulo utente base con placeholder foto:
 - **Modello Photo**: Fluent model con `s3_url`, `species`, `notes`, `latitude`/`longitude` (scalari, PostGIS per query geo in futuro), `taken_at`
 - **Foto placeholder**: `POST /user/photos` salva con `s3_url = "placeholder://pending-upload"` — upload S3 reale da implementare
 - **Migration**: `CreatePhoto` con foreign key `user_id` → `users(id)` con `onDelete: .cascade`
+
+### Pipeline MVP con mock data (2026-03-08)
+
+Implementata la pipeline completa con dati mock e griglia ridotta (provincia Trentino):
+- **Core/Config**: `AppConfig` structs Codable + `ConfigLoader` che decodifica `config/app.yaml` con Yams. Validazione con crash `.critical` su file mancante o malformato
+- **GeoDataLoader**: protocolli `ForestCoverageClient` e `AltitudeClient` con mock implementations. Enums `ForestType` (broadleaf/coniferous/mixed/none) e `SoilType` (calcareous/siliceous/mixed/other) con scoring helpers. Clienti pensati come download one-time (non parte della pipeline giornaliera)
+- **GridGenerator**: genera griglia equidistante ~500m su bbox arbitraria. Compensazione longitudine per latitudine. Trentino test bbox: ~24k punti
+- **WeatherFetcher**: protocollo `WeatherClient` + `MockWeatherClient` con dati deterministici. `WeatherData`: rain14d, avgTemperature, avgHumidity
+- **ScoringEngine**: struct pura, nessun side effect. Formula da architecture.md con 5 pesi da config + moltiplicatore umidità. Funzioni score individuali con curve realistiche (rain ottimale 40-80mm, temp ottimale 15-22°C, altitude ottimale 400-1200m)
+- **PipelineRunner**: actor orchestratore con dependency injection dei 3 client. Fasi: grid → geo enrichment → weather fetch → scoring. Batch processing con `TaskGroup`. Log dettagliati per fase con durata e conteggio record
+- **Test**: 34 test (ScoringEngine 20, ConfigLoader 5, GridGenerator 6) — tutti passing
