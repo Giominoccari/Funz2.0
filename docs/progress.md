@@ -8,7 +8,7 @@ Stato avanzamento rispetto alle fasi definite in `architecture.md`.
 
 - [x] Setup progetto Vapor + Docker Compose locale (Postgres + Redis)
 - [x] AuthModule completo (register, login, JWT, refresh)
-- [ ] UserModule base (profilo, placeholder foto)
+- [x] UserModule base (profilo, placeholder foto)
 - [ ] Pipeline manuale con dati meteo mock e griglia ridotta (provincia test)
 - [ ] Tile statici caricati a mano su S3
 - [ ] App iOS che visualizza tile su MapLibre
@@ -61,3 +61,13 @@ Implementato il modulo di autenticazione completo:
 - **Middleware JWT**: `JWTAuthMiddleware` pronto per proteggere route future (User, Map, etc.)
 - **Test target**: usa `VaporTesting` (non XCTVapor) con Swift Testing framework
 - **Package.swift**: aggiunto `VaporTesting` al test target al posto di `XCTVapor`
+
+### UserModule (2026-03-07)
+
+Implementato il modulo utente base con placeholder foto:
+- **Endpoints**: `GET /user/profile`, `PUT /user/profile`, `GET /user/photos`, `POST /user/photos`, `DELETE /user/photos/:photoID`
+- **Tutte le route protette** da `JWTAuthMiddleware`
+- **Profilo utente**: aggiunto `display_name`, `bio`, `photo_url` al modello `User` (migration `AddUserProfileFields`)
+- **Modello Photo**: Fluent model con `s3_url`, `species`, `notes`, `latitude`/`longitude` (scalari, PostGIS per query geo in futuro), `taken_at`
+- **Foto placeholder**: `POST /user/photos` salva con `s3_url = "placeholder://pending-upload"` — upload S3 reale da implementare
+- **Migration**: `CreatePhoto` con foreign key `user_id` → `users(id)` con `onDelete: .cascade`

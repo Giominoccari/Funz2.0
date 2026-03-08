@@ -65,6 +65,7 @@ fastlane/test_output
 .claude/memory/
 
 # Funz2.0
+Keys/*
 .env
 config/secrets.yaml
 *.o

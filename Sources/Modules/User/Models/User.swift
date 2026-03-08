@@ -18,11 +18,23 @@ final class User: Model, Content, @unchecked Sendable {
     @OptionalField(key: "apple_user_id")
     var appleUserID: String?
 
+    @OptionalField(key: "display_name")
+    var displayName: String?
+
+    @OptionalField(key: "bio")
+    var bio: String?
+
+    @OptionalField(key: "photo_url")
+    var photoURL: String?
+
     @Timestamp(key: "created_at", on: .create)
     var createdAt: Date?
 
     @Children(for: \.$user)
     var refreshTokens: [RefreshToken]
+
+    @Children(for: \.$user)
+    var photos: [Photo]
 
     init() {}
 
