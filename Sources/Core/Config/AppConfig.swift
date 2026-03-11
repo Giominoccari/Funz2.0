@@ -4,6 +4,7 @@ struct AppConfig: Codable, Sendable {
     let server: ServerConfig
     let pipeline: PipelineConfig
     let map: MapConfig
+    let s3: S3Config
 }
 
 struct ServerConfig: Codable, Sendable {
@@ -32,4 +33,10 @@ struct MapConfig: Codable, Sendable {
     let tileRetentionDays: Int
     let freeMaxZoom: Int
     let proMaxZoom: Int
+}
+
+struct S3Config: Codable, Sendable {
+    let tileBucket: String
+    let region: String
+    let uploadBatchSize: Int
 }

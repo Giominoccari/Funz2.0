@@ -22,6 +22,10 @@ let package = Package(
         .package(url: "https://github.com/apple/swift-log.git", from: "1.6.0"),
         // Pinned to main: fix for Swift 6.2 MemberImportVisibility (unreleased > 1.21.0)
         .package(url: "https://github.com/vapor/async-kit.git", branch: "main"),
+        // PNG encoding (pure Swift, cross-platform)
+        .package(url: "https://github.com/tayloraswift/swift-png.git", from: "4.4.0"),
+        // AWS S3 upload
+        .package(url: "https://github.com/soto-project/soto.git", from: "7.0.0"),
     ],
     targets: [
         .executableTarget(
@@ -34,6 +38,8 @@ let package = Package(
                 .product(name: "Yams", package: "Yams"),
                 .product(name: "JWTKit", package: "jwt-kit"),
                 .product(name: "Logging", package: "swift-log"),
+                .product(name: "PNG", package: "swift-png"),
+                .product(name: "SotoS3", package: "soto"),
             ],
             path: "Sources"
         ),

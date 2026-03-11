@@ -5,37 +5,38 @@ import JWTKit
 import VaporTesting
 @testable import App
 
-@Suite("Auth Controller Integration Tests")
+@Suite("Auth Controller Integration Tests", .serialized)
 struct AuthControllerTests {
     private static let testRSAPrivateKey = """
-    -----BEGIN RSA PRIVATE KEY-----
-    MIIEpAIBAAKCAQEA0Z3VS5JJcds3xfn/ygWyF8PbnGy0AHB7MhgHcTz6sE2I2yPB
-    aNVFMBnPJGKMGCXGkMKIeL3W0FVO5IwnkEa4Tgpz3Hk2HMsqxMUsVGFJoG6QLKN
-    M/cOwFhBOb3iGnGVMWbPvUBGfSPOtyTTPJRUqJk1WLjQC7G0Lq3JHNdWjfT7oRR1
-    TbRCSCIJhDP3JHlAzMExYIAUkNymBD3dDQ3KiBn0kC95JBbBBn5jNGSLv3XmPBp7E
-    9y0sBbD3a1Hzt/5kFmxMt0AuEnSsmFECnkLZ/LjDnGunL+FN9YE/jwGM8N3/eOVM
-    S19wlHka+aMHgqHqLSS5DXMTJXK8ESJ0V+hZKwIDAQABAoIBAC5RgZ+hBx7xHNaM
-    pPgwGMnCd6P5m0qlZF9bMCXKIGN0W5T+y5p4SnGCdJM5I0x4bR6M7RTJylGAy4sb
-    BXN0WPMx3VLJZMzHN5KpcbOEm2YMXrFOlXb1m3HGBLF9sMV+TzZP0OQXQ3LBNpH
-    91e4G4kP1b3XQ0UpDW4ThdR4+H5Ts9ZBbxH4C3bU6JhRfHlvL3u/O5jPiG1OVwuP
-    F3iihPbE0k/2vCiKaBSB0tvRD3RjlVP6Z4Gii60P8SIQqv/XENNiLGnp0pjANxz4
-    l3MBOhL8APvGETTR2K5a/r7+BKXkQHp3tIF7x0gzI9QSGbfbe+BpHQMfYK5rxY9p
-    2FLNhcECgYEA6z4FT+o/AqrZLhMBlfrps+t2/C7G+B47B71R3FbmM++wTK3NjEBk
-    d76b8PLFfwq/b6zQ1gOmRz0oYMJFJq5fMiskIIaeyBJsF0CnU7JQWP/TLnFmFLP5
-    QIi+XWqTsGHUYJ/KBpVPIEiYfhABjuFli5mJMAKZ2bOZBmr2TH2v4DECgYEA4y0V
-    gMb8TXQJnIdPO1oD3GIbMFNwPJjSQZ7Ctt8nFSQVoOcNbwGLxkNjlAYEBmpKL1hb
-    TOiqXsMS41JoScC4hVJIcqPvOnhpA3YjSQqJO5Gi9VMEPDE75xei1fSf5ztakSD/k
-    4RoaHEfKPFW0zIoZA8EfC2sGPNUZQ2EL4pKFRysCgYBiVhq1lBv6CEH3LqDUPPK7
-    b0N9PhXmi+97DJrnNaO1K/Dv1KGOh/YBWktn8kFb3HVCAGGpLMRW6MBMEFJrfUlQ
-    K1mcDqBZ+lNOTLKMqKKz7c2Cdd/G3UX+mOQ8VPzsMn0O+a2HZskFnfipTbedya3e
-    wBevjyPJJawGr0k8cR3YsQKBgQDEq38FEMog0rJLZ3aKWAPceX3GKNL5pdfBP5Ih
-    dVl8F/e3hLCMvHpHSJFD0i1gfOl1JB9UD1eDNGt2K+5gZG+nSKS5RSJEJDyCD+r0
-    F30jAKSMICWaO2a4cPMm0EmzNAIFSbNTiGQVJ6KMwJCVq5I1TMl6DMGrC9JmVW9r
-    G6fhvwKBgQCqxvVy6jhH1sDxjIbLqEH2eVP0RcHe1Gs+D1InWTZYHAJRFmVjuWtw
-    Omd3mSHf7WPILFoB4YHdTXbQfDe0R+qwInz2KJDHcHKn4gT0Lqe6MNJw5bQBFjy8
-    0iXXsFX3dq4VxhUJ3DBCnGpxjWIPyBpd/K+JeOMBRTx2LvfT7J+SGQ==
-    -----END RSA PRIVATE KEY-----
-    """
+-----BEGIN PRIVATE KEY-----
+MIIEvwIBADANBgkqhkiG9w0BAQEFAASCBKkwggSlAgEAAoIBAQDa6q3hjnCJwOl7
+4S9HzNM5YcR4tX+EpwPjgohQjLrdhHVgJwU7tacZffqYdL4JN8hUq8U8L7gAZlbU
+DGPxiB0oNtn88X2rbtMLTZo34Zg9VbfamZR2QPoAuLI1aowvdnCbi4ZCGZkzHPWi
+r9JOuvnkBrzZjBWeL4iZtQb5FtDy4MhKo9ljMlVI84dL4ZQEkxvLY92zqWokPeA/
+/zHd37jRnnWv8zGyD4PNT2mZdPzFIDdkM00AsyggsX0fEnpMsaHW0tMuwvu8W6PE
+9p2Amw7Kl/P3h8aG4/DAegozNIVYpmP/xOntn7ZtfYoHZsTClSSPAtbJmKhaxlcV
+L4Tsgw1PAgMBAAECggEAadgWqxwp6EiX+vfE2uO66p8NFcm3NmVj+W+mxb9NKAY/
+k/Y5zwVEngwtieHD8gQA/YMxcSinP7Y7W/oDpoeHhWaD3grKloUWT/w8yLDv4RPd
+OTmRMN24onmqXC5ASkBrMKF0j+f9jNt/HiIBPmSjpq7lRw+2cg2Mb7i5ftybuRm1
+gMGBPpotcg9UwuYeJRnPllPkNoJPwrYLct/SjsRyxQYd6/OTQfSehyM4JI/OM8Av
+P0ZhhxRJzGYQz5xLS7ifMjWZ/1OkgiQG5uetxMZeHMCp5O6eFJr0SFeXdy6kSje+
+WvLDP1j6MZBtEx3IqOMwV+zsHawcO4vkF9wcv/JXHQKBgQDuPNYCwvdcm+fLrPcI
+moWrdnoRaE3uWGF/g/8pGFWb4uErJe7byUrm5CFoRdrdI+Bpc7QdF6/P7UgYfz3I
+a9MtnOkrHVU8WV3w/WPIszu/H6wYSuj6GrLC1N7xQe5tCaeORxMiEPegA5L1DsgW
+OmPLG0L+3Ed4j5/l+7lbOkVw/QKBgQDrPRIxKPVfh5rVDl1xHnCpTwxIlr9srhhE
+bwtF3Y4Cyu78iM0Rhu41ZQj+CTzogWC+QAPLvsbZTdwhp6N0Ax39Nq/N2MXEaeX9
+X/tm/7Zff27dSAGqwlDJMfbSUw8Wmdk3vX4Vre7cTuL2T/4zB1f6XyplHxx0cNpA
+D5+g067/OwKBgQCHdBOCMnQONZ6PUWKLg7/og05YQ2O71ohoxhX3uZxDK7Y2oDS0
+xjhOGvtbnAwam+FmU6Dewa72m8TYGNB5+cRyNLrmBqGF1JHzCT8Ix896lXl1vnHE
+chWdbQbtST1UxZ586LBaOCdy1VVi++qLqNtAidmHqpsAUzjovDzhP7pnyQKBgQC+
+0dlx+1Gf3nZgobh2zESDctX6BB7f4BFbYeB5GhHafheCzs3ai+OreHvk5kV8LYb2
+jSMHIYhYOep5em0C7IxlHPlbN56lh2nDMRrUIFYl/U9HPOPtSpcRvfAECNBSexZT
+OumOWHtMRsmhGJ6RckGRnaTcRnJkmi7QjFvmsBBihQKBgQDUyCo5AJaSSxjklKQJ
+Sl60ilkMobqH1bv2ajnyaj2IjwYiCkldZcWkJ6n83z9PhGK0Fh2sTgxy04ep/Bm7
+/wy6LPchIrgrsdyZyn1/vdTYM1tzTigdyo+6zmOX6ylcJO+wtwo3y79D4/mGVsPA
+pNrnY0pTbRYvk5c0ZNNcPk6MYg==
+-----END PRIVATE KEY-----
+"""
 
     private func configureTestApp(_ app: Application) async throws {
         guard let databaseURL = Environment.get("DATABASE_URL") else {
@@ -48,12 +49,13 @@ struct AuthControllerTests {
         app.jwtKeys = await JWTKeyCollection().add(rsa: rsaKey, digestAlgorithm: .sha256)
 
         try AuthModule.configure(app)
-        try await app.autoMigrate()
+        try UserModule.configure(app)
         try routes(app)
     }
 
     private func withTestApp(_ body: (Application) async throws -> Void) async throws {
         try await withApp(configure: configureTestApp) { app in
+            try await app.autoMigrate()
             try await body(app)
             try await app.autoRevert()
         }

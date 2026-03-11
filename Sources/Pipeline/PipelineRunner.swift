@@ -8,17 +8,20 @@ actor PipelineRunner {
     private let weatherClient: any WeatherClient
     private let forestClient: any ForestCoverageClient
     private let altitudeClient: any AltitudeClient
+    private let tileUploader: any TileUploader
 
     init(
         config: PipelineConfig,
         weatherClient: any WeatherClient,
         forestClient: any ForestCoverageClient,
-        altitudeClient: any AltitudeClient
+        altitudeClient: any AltitudeClient,
+        tileUploader: any TileUploader = MockTileUploader()
     ) {
         self.config = config
         self.weatherClient = weatherClient
         self.forestClient = forestClient
         self.altitudeClient = altitudeClient
+        self.tileUploader = tileUploader
     }
 
     func run(bbox: BoundingBox) async throws -> [ScoringEngine.Result] {
@@ -65,13 +68,48 @@ actor PipelineRunner {
         ])
 
         let avgScore = results.isEmpty ? 0 : results.map(\.score).reduce(0, +) / Double(results.count)
-        logger.info("Pipeline run complete", metadata: [
+        logger.info("Scoring complete", metadata: [
             "totalPoints": "\(results.count)",
             "avgScore": "\(String(format: "%.3f", avgScore))",
             "totalDuration": "\(ContinuousClock.now - runStart)"
         ])
 
         return results
+    }
+
+    /// Full pipeline: score → generate tiles → upload to S3.
+    func runFull(bbox: BoundingBox, date: String) async throws {
+        let fullStart = ContinuousClock.now
+
+        // Phases 1-4: Scoring
+        let results = try await run(bbox: bbox)
+
+        // Phase 5: Tile generation
+        let phaseStart5 = ContinuousClock.now
+        let tileGen = TileGenerator(
+            tileZoomMin: config.tileZoomMin,
+            tileZoomMax: config.tileZoomMax
+        )
+        let tiles = tileGen.generateAll(results: results, bbox: bbox)
+        logger.info("Phase 5 — Tile generation complete", metadata: [
+            "tiles": "\(tiles.count)",
+            "duration": "\(ContinuousClock.now - phaseStart5)"
+        ])
+
+        // Phase 6: S3 upload
+        let phaseStart6 = ContinuousClock.now
+        try await tileUploader.upload(tiles: tiles, date: date)
+        logger.info("Phase 6 — S3 upload complete", metadata: [
+            "tiles": "\(tiles.count)",
+            "duration": "\(ContinuousClock.now - phaseStart6)"
+        ])
+
+        logger.info("Full pipeline complete", metadata: [
+            "totalPoints": "\(results.count)",
+            "totalTiles": "\(tiles.count)",
+            "date": "\(date)",
+            "totalDuration": "\(ContinuousClock.now - fullStart)"
+        ])
     }
 
     private func enrichWithGeoData(_ points: [GridPoint]) async throws -> [GridPoint] {

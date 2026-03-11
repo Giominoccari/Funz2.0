@@ -19,3 +19,8 @@ map:
   tileRetentionDays: 90
   freeMaxZoom: 9
   proMaxZoom: 12
+
+s3:
+  tileBucket: funghi-map-tiles
+  region: eu-south-1
+  uploadBatchSize: 50

@@ -10,8 +10,8 @@ Stato avanzamento rispetto alle fasi definite in `architecture.md`.
 - [x] AuthModule completo (register, login, JWT, refresh)
 - [x] UserModule base (profilo, placeholder foto)
 - [x] Pipeline manuale con dati meteo mock e griglia ridotta (provincia test)
-- [ ] Tile statici caricati a mano su S3
-- [ ] App iOS che visualizza tile su MapLibre
+- [x] Tile statici caricati a mano su S3
+- [ ] Pagina web MapLibre che visualizza i tile overlay su mappa base (hosted come static page o servita da Vapor)
 
 ## Beta (mese 3-4)
 
@@ -82,3 +82,17 @@ Implementata la pipeline completa con dati mock e griglia ridotta (provincia Tre
 - **ScoringEngine**: struct pura, nessun side effect. Formula da architecture.md con 5 pesi da config + moltiplicatore umidità. Funzioni score individuali con curve realistiche (rain ottimale 40-80mm, temp ottimale 15-22°C, altitude ottimale 400-1200m)
 - **PipelineRunner**: actor orchestratore con dependency injection dei 3 client. Fasi: grid → geo enrichment → weather fetch → scoring. Batch processing con `TaskGroup`. Log dettagliati per fase con durata e conteggio record
 - **Test**: 34 test (ScoringEngine 20, ConfigLoader 5, GridGenerator 6) — tutti passing
+
+### TileGenerator + S3Uploader (2026-03-08)
+
+Implementati generazione tile PNG e upload S3, completando la pipeline end-to-end:
+- **TileMath**: funzioni pure per conversione coordinate ↔ tile XYZ (Web Mercator). `tilesForBBox` calcola tile necessari per bbox a ogni zoom level
+- **Colormap**: mapping score [0–1] → RGBA con gradiente green→yellow→red, trasparente per score 0/no data
+- **IDWInterpolator**: interpolazione Inverse Distance Weighting con indice spaziale grid-based (bucket per cella lat/lon). Ricerca 9 celle vicine, power=2, raggio ~2km. Performante su ~24k punti
+- **TileGenerator**: struct Sendable. Per ogni zoom level (6–12), enumera tile, renderizza 256×256 pixel via IDW + colormap, codifica PNG con swift-png. Skip tile completamente trasparenti. ~350-400 tile per Trentino
+- **S3TileUploader**: protocollo `TileUploader` + implementazione Soto S3. Upload batch con `TaskGroup`, path `{date}/{z}/{x}/{y}.png`, Content-Type `image/png`
+- **MockTileUploader**: mock per test, registra path uploadati
+- **PipelineRunner esteso**: nuovo metodo `runFull(bbox:date:)` che esegue fasi 1-4 (scoring) + fase 5 (tile generation) + fase 6 (S3 upload). Backward-compatible con `run(bbox:)` esistente
+- **Config**: aggiunto `S3Config` (tileBucket, region, uploadBatchSize) in `AppConfig` + `config/app.yaml`
+- **Dipendenze**: `swift-png` 4.4+ (PNG encoding pure Swift, cross-platform) + `soto` 7.0+ (AWS SDK, solo SotoS3)
+- **Test**: 56 test totali (+22 nuovi: TileMath 9, Colormap 5, IDW 3, TileGenerator 3, MockUploader 1, ScoringEngine 20 esistenti) — tutti passing
