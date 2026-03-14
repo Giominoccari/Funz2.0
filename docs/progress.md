@@ -107,3 +107,17 @@ Implementata pagina web MapLibre e modulo Map per servire tile, completando l'MV
   - `GET /map/dates` — scan directory locali, ritorna array JSON date disponibili
 - **FileMiddleware**: aggiunto in `configure.swift` per servire `Public/` come static files
 - **Storage/tiles/**: directory locale per tile cache in sviluppo (con `.gitkeep`)
+
+### Makefile (2026-03-14)
+
+Aggiunto `Makefile` in root con comandi per gestione ambiente di sviluppo locale:
+- **`make up`**: avvia Docker services (Postgres + Redis), esegue setup DB, builda e avvia Vapor server
+- **`make down`**: ferma tutti i servizi Docker
+- **`make restart`**: stop + rebuild + riavvio completo
+- **`make build`** / **`make test`**: build e test Swift
+- **`make test-scoring`**: test solo ScoringEngine
+- **`make db-setup`** / **`make db-shell`**: setup DB e shell psql
+- **`make services-up`** / **`make services-down`**: gestione solo Docker (senza Vapor)
+- **`make status`** / **`make logs`**: stato e log dei container
+- **`make clean`** / **`make clean-all`**: pulizia build artifacts e opzionalmente volumi Docker
+- **`make help`**: lista comandi disponibili
