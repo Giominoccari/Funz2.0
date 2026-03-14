@@ -11,7 +11,7 @@ Stato avanzamento rispetto alle fasi definite in `architecture.md`.
 - [x] UserModule base (profilo, placeholder foto)
 - [x] Pipeline manuale con dati meteo mock e griglia ridotta (provincia test)
 - [x] Tile statici caricati a mano su S3
-- [ ] Pagina web MapLibre che visualizza i tile overlay su mappa base (hosted come static page o servita da Vapor)
+- [x] Pagina web MapLibre che visualizza i tile overlay su mappa base (hosted come static page o servita da Vapor)
 
 ## Beta (mese 3-4)
 
@@ -96,3 +96,14 @@ Implementati generazione tile PNG e upload S3, completando la pipeline end-to-en
 - **Config**: aggiunto `S3Config` (tileBucket, region, uploadBatchSize) in `AppConfig` + `config/app.yaml`
 - **Dipendenze**: `swift-png` 4.4+ (PNG encoding pure Swift, cross-platform) + `soto` 7.0+ (AWS SDK, solo SotoS3)
 - **Test**: 56 test totali (+22 nuovi: TileMath 9, Colormap 5, IDW 3, TileGenerator 3, MockUploader 1, ScoringEngine 20 esistenti) — tutti passing
+
+### MapModule + MapLibre viewer (2026-03-14)
+
+Implementata pagina web MapLibre e modulo Map per servire tile, completando l'MVP:
+- **Pagina web**: `Public/index.html` — MapLibre GL JS v4 (CDN, zero build step). Base map OpenStreetMap + overlay XYZ raster da `/map/tiles/{date}/{z}/{x}/{y}`. Centrata su Trentino (46.07°N, 11.12°E, zoom 8). Controlli: date picker + opacity slider
+- **MapModule**: bootstrap module (pattern identico ad AuthModule/UserModule)
+- **MapController**: 2 endpoint:
+  - `GET /map/tiles/:date/:z/:x/:y` — local-first (`Storage/tiles/`) con fallback S3 presigned URL redirect. Validazione zoom 6–12. Nessuna auth per MVP
+  - `GET /map/dates` — scan directory locali, ritorna array JSON date disponibili
+- **FileMiddleware**: aggiunto in `configure.swift` per servire `Public/` come static files
+- **Storage/tiles/**: directory locale per tile cache in sviluppo (con `.gitkeep`)
