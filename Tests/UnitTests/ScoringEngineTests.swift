@@ -9,16 +9,16 @@ struct ScoringEngineTests {
     @Test("forestScore returns correct values for each type")
     func forestScore() {
         #expect(ScoreFunctions.forestScore(.mixed) == 1.0)
-        #expect(ScoreFunctions.forestScore(.broadleaf) == 0.8)
-        #expect(ScoreFunctions.forestScore(.coniferous) == 0.6)
+        #expect(ScoreFunctions.forestScore(.broadleaf) == 0.85)
+        #expect(ScoreFunctions.forestScore(.coniferous) == 0.80)
         #expect(ScoreFunctions.forestScore(.none) == 0.0)
     }
 
     @Test("soilScore returns correct values for each type")
     func soilScore() {
-        #expect(ScoreFunctions.soilScore(.calcareous) == 1.0)
-        #expect(ScoreFunctions.soilScore(.mixed) == 0.8)
-        #expect(ScoreFunctions.soilScore(.siliceous) == 0.5)
+        #expect(ScoreFunctions.soilScore(.mixed) == 1.0)
+        #expect(ScoreFunctions.soilScore(.calcareous) == 0.85)
+        #expect(ScoreFunctions.soilScore(.siliceous) == 0.70)
         #expect(ScoreFunctions.soilScore(.other) == 0.2)
     }
 
@@ -31,39 +31,39 @@ struct ScoringEngineTests {
     @Test("rainScore optimal range returns 1.0")
     func rainScoreOptimal() {
         #expect(ScoreFunctions.rainScore(50) == 1.0)
-        #expect(ScoreFunctions.rainScore(40) == 1.0)
-        #expect(ScoreFunctions.rainScore(80) == 1.0)
+        #expect(ScoreFunctions.rainScore(70) == 1.0)
+        #expect(ScoreFunctions.rainScore(90) == 1.0)
     }
 
     @Test("rainScore low rain returns partial score")
     func rainScoreLow() {
         let score10 = ScoreFunctions.rainScore(10)
-        #expect(score10 > 0.0 && score10 < 0.5)
+        #expect(score10 > 0.0 && score10 < 0.3)
 
-        let score30 = ScoreFunctions.rainScore(30)
-        #expect(score30 > 0.5 && score30 < 1.0)
+        let score35 = ScoreFunctions.rainScore(35)
+        #expect(score35 > 0.5 && score35 < 1.0)
     }
 
-    @Test("rainScore excessive rain decreases score")
+    @Test("rainScore excessive rain decreases but floors at 0.1")
     func rainScoreExcessive() {
-        let score100 = ScoreFunctions.rainScore(100)
-        #expect(score100 > 0.0 && score100 < 1.0)
+        let score110 = ScoreFunctions.rainScore(110)
+        #expect(score110 > 0.5 && score110 < 1.0)
 
         let score200 = ScoreFunctions.rainScore(200)
-        #expect(score200 == 0.0)
+        #expect(score200 == 0.1)
     }
 
-    @Test("tempScore freezing returns zero")
+    @Test("tempScore below 4°C returns zero")
     func tempScoreFreezing() {
         #expect(ScoreFunctions.tempScore(0) == 0.0)
-        #expect(ScoreFunctions.tempScore(4) == 0.0)
+        #expect(ScoreFunctions.tempScore(3) == 0.0)
     }
 
-    @Test("tempScore optimal range returns 1.0")
+    @Test("tempScore optimal range 12-20°C returns 1.0")
     func tempScoreOptimal() {
-        #expect(ScoreFunctions.tempScore(15) == 1.0)
-        #expect(ScoreFunctions.tempScore(18) == 1.0)
-        #expect(ScoreFunctions.tempScore(22) == 1.0)
+        #expect(ScoreFunctions.tempScore(12) == 1.0)
+        #expect(ScoreFunctions.tempScore(16) == 1.0)
+        #expect(ScoreFunctions.tempScore(20) == 1.0)
     }
 
     @Test("tempScore hot returns zero")
@@ -72,10 +72,13 @@ struct ScoringEngineTests {
         #expect(ScoreFunctions.tempScore(40) == 0.0)
     }
 
-    @Test("tempScore gradual increase 5-15")
-    func tempScoreGradual() {
+    @Test("tempScore autumn range 4-12°C gives partial score")
+    func tempScoreAutumn() {
+        let score6 = ScoreFunctions.tempScore(6)
+        #expect(score6 > 0.0 && score6 < 0.7)
+
         let score10 = ScoreFunctions.tempScore(10)
-        #expect(score10 == 0.5)
+        #expect(score10 > 0.7 && score10 < 1.0)
     }
 
     @Test("humidityScore low returns zero")
@@ -96,34 +99,65 @@ struct ScoringEngineTests {
         #expect(score50 == 0.5)
     }
 
-    @Test("altitudeScore below 100m returns 0.1")
+    @Test("altitudeScore below 50m returns 0.05")
     func altitudeScoreLowland() {
-        #expect(ScoreFunctions.altitudeScore(50) == 0.1)
+        #expect(ScoreFunctions.altitudeScore(30) == 0.05)
     }
 
-    @Test("altitudeScore optimal range returns 1.0")
+    @Test("altitudeScore optimal range 400-1800m returns 1.0")
     func altitudeScoreOptimal() {
         #expect(ScoreFunctions.altitudeScore(400) == 1.0)
         #expect(ScoreFunctions.altitudeScore(800) == 1.0)
         #expect(ScoreFunctions.altitudeScore(1200) == 1.0)
+        #expect(ScoreFunctions.altitudeScore(1800) == 1.0)
     }
 
-    @Test("altitudeScore above 2000m returns 0")
+    @Test("altitudeScore above 2400m returns 0.1")
     func altitudeScoreAlpine() {
-        #expect(ScoreFunctions.altitudeScore(2100) == 0.0)
+        #expect(ScoreFunctions.altitudeScore(2500) == 0.1)
     }
 
-    @Test("altitudeScore gradual decline 1200-2000")
+    @Test("altitudeScore gradual decline 1800-2400")
     func altitudeScoreDecline() {
-        let score1600 = ScoreFunctions.altitudeScore(1600)
-        #expect(score1600 == 0.5)
+        let score2100 = ScoreFunctions.altitudeScore(2100)
+        #expect(score2100 > 0.1 && score2100 < 1.0)
+    }
+
+    @Test("aspectScore flat terrain returns 0.7")
+    func aspectScoreFlat() {
+        #expect(ScoreFunctions.aspectScore(0) == 0.7)
+    }
+
+    @Test("aspectScore north-facing returns 1.0")
+    func aspectScoreNorth() {
+        let score = ScoreFunctions.aspectScore(360)
+        #expect(abs(score - 1.0) < 0.01)
+    }
+
+    @Test("aspectScore south-facing returns ~0.30")
+    func aspectScoreSouth() {
+        let score = ScoreFunctions.aspectScore(180)
+        #expect(abs(score - 0.30) < 0.01)
+    }
+
+    @Test("aspectScore east/west returns ~0.65")
+    func aspectScoreEastWest() {
+        let scoreE = ScoreFunctions.aspectScore(90)
+        let scoreW = ScoreFunctions.aspectScore(270)
+        #expect(abs(scoreE - 0.65) < 0.01)
+        #expect(abs(scoreW - 0.65) < 0.01)
     }
 
     // MARK: - ScoringEngine integration
 
     static let defaultWeights = ScoringWeights(
-        forest: 0.30, rain14d: 0.25, temperature: 0.20,
-        altitude: 0.15, soil: 0.10
+        base: ScoringWeights.BaseWeights(
+            forest: 0.40, altitude: 0.25, soil: 0.20, aspect: 0.15
+        ),
+        weather: ScoringWeights.WeatherScoringWeights(
+            rain14d: 0.55, temperature: 0.45
+        ),
+        humidityMultiplierMin: 0.4
     )
 
     @Test("Perfect conditions yield high score")
@@ -132,11 +166,11 @@ struct ScoringEngineTests {
         let point = GridPoint(
             latitude: 46.0, longitude: 11.3,
             altitude: 800, forestType: .mixed,
-            soilType: .calcareous, aspect: 180
+            soilType: .mixed, aspect: 360
         )
-        let weather = WeatherData(rain14d: 60, avgTemperature: 18, avgHumidity: 80)
+        let weather = WeatherData(rain14d: 60, avgTemperature: 16, avgHumidity: 80)
         let result = engine.score(.init(point: point, weather: weather))
-        #expect(result.score > 0.85)
+        #expect(result.score > 0.80)
     }
 
     @Test("Terrible conditions yield low score")
@@ -144,12 +178,12 @@ struct ScoringEngineTests {
         let engine = ScoringEngine(weights: ScoringEngineTests.defaultWeights)
         let point = GridPoint(
             latitude: 46.0, longitude: 11.3,
-            altitude: 50, forestType: .none,
-            soilType: .other, aspect: 0
+            altitude: 30, forestType: .none,
+            soilType: .other, aspect: 180
         )
         let weather = WeatherData(rain14d: 0, avgTemperature: 2, avgHumidity: 10)
         let result = engine.score(.init(point: point, weather: weather))
-        #expect(result.score < 0.1)
+        #expect(result.score < 0.05)
     }
 
     @Test("Score is clamped between 0 and 1")
@@ -158,9 +192,9 @@ struct ScoringEngineTests {
         let point = GridPoint(
             latitude: 46.0, longitude: 11.3,
             altitude: 800, forestType: .mixed,
-            soilType: .calcareous, aspect: 180
+            soilType: .mixed, aspect: 360
         )
-        let weather = WeatherData(rain14d: 60, avgTemperature: 18, avgHumidity: 100)
+        let weather = WeatherData(rain14d: 60, avgTemperature: 16, avgHumidity: 100)
         let result = engine.score(.init(point: point, weather: weather))
         #expect(result.score >= 0.0 && result.score <= 1.0)
     }
@@ -175,9 +209,9 @@ struct ScoringEngineTests {
                     longitude: 11.3,
                     altitude: 600,
                     forestType: .mixed,
-                    soilType: .calcareous
+                    soilType: .mixed
                 ),
-                weather: WeatherData(rain14d: 50, avgTemperature: 18, avgHumidity: 75)
+                weather: WeatherData(rain14d: 60, avgTemperature: 16, avgHumidity: 75)
             )
         }
         let results = engine.scoreBatch(inputs)
@@ -187,16 +221,16 @@ struct ScoringEngineTests {
         }
     }
 
-    @Test("Low humidity penalizes score via multiplier")
+    @Test("Low humidity penalizes weather score via multiplier")
     func humidityMultiplier() {
         let engine = ScoringEngine(weights: ScoringEngineTests.defaultWeights)
         let point = GridPoint(
             latitude: 46.0, longitude: 11.3,
             altitude: 800, forestType: .mixed,
-            soilType: .calcareous, aspect: 180
+            soilType: .mixed, aspect: 360
         )
-        let wetWeather = WeatherData(rain14d: 60, avgTemperature: 18, avgHumidity: 90)
-        let dryWeather = WeatherData(rain14d: 60, avgTemperature: 18, avgHumidity: 20)
+        let wetWeather = WeatherData(rain14d: 60, avgTemperature: 16, avgHumidity: 90)
+        let dryWeather = WeatherData(rain14d: 60, avgTemperature: 16, avgHumidity: 20)
 
         let wetResult = engine.score(.init(point: point, weather: wetWeather))
         let dryResult = engine.score(.init(point: point, weather: dryWeather))
@@ -208,9 +242,64 @@ struct ScoringEngineTests {
     func resultCoordinates() {
         let engine = ScoringEngine(weights: ScoringEngineTests.defaultWeights)
         let point = GridPoint(latitude: 46.123, longitude: 11.456, altitude: 500, forestType: .broadleaf, soilType: .mixed)
-        let weather = WeatherData(rain14d: 40, avgTemperature: 18, avgHumidity: 70)
+        let weather = WeatherData(rain14d: 60, avgTemperature: 16, avgHumidity: 70)
         let result = engine.score(.init(point: point, weather: weather))
         #expect(result.latitude == 46.123)
         #expect(result.longitude == 11.456)
+    }
+
+    @Test("Result exposes baseScore and weatherScore")
+    func resultExposesLayerScores() {
+        let engine = ScoringEngine(weights: ScoringEngineTests.defaultWeights)
+        let point = GridPoint(latitude: 46.0, longitude: 11.3, altitude: 800, forestType: .mixed, soilType: .mixed, aspect: 360)
+        let weather = WeatherData(rain14d: 60, avgTemperature: 16, avgHumidity: 80)
+        let result = engine.score(.init(point: point, weather: weather))
+        #expect(result.baseScore > 0.0)
+        #expect(result.weatherScore > 0.0)
+        #expect(result.score > 0.0)
+    }
+
+    @Test("baseScore is independent of weather data")
+    func baseScoreIndependent() {
+        let engine = ScoringEngine(weights: ScoringEngineTests.defaultWeights)
+        let point = GridPoint(latitude: 46.0, longitude: 11.3, altitude: 800, forestType: .mixed, soilType: .mixed, aspect: 360)
+        let weather1 = WeatherData(rain14d: 60, avgTemperature: 16, avgHumidity: 80)
+        let weather2 = WeatherData(rain14d: 10, avgTemperature: 5, avgHumidity: 30)
+
+        let result1 = engine.score(.init(point: point, weather: weather1))
+        let result2 = engine.score(.init(point: point, weather: weather2))
+
+        #expect(result1.baseScore == result2.baseScore)
+    }
+
+    @Test("weatherScore is independent of geo data")
+    func weatherScoreIndependent() {
+        let engine = ScoringEngine(weights: ScoringEngineTests.defaultWeights)
+        let point1 = GridPoint(latitude: 46.0, longitude: 11.3, altitude: 800, forestType: .mixed, soilType: .mixed, aspect: 360)
+        let point2 = GridPoint(latitude: 46.0, longitude: 11.3, altitude: 200, forestType: .none, soilType: .other, aspect: 180)
+        let weather = WeatherData(rain14d: 60, avgTemperature: 16, avgHumidity: 80)
+
+        let result1 = engine.score(.init(point: point1, weather: weather))
+        let result2 = engine.score(.init(point: point2, weather: weather))
+
+        #expect(result1.weatherScore == result2.weatherScore)
+    }
+
+    @Test("Zero base score yields zero final score regardless of weather")
+    func zeroBaseYieldsZero() {
+        let engine = ScoringEngine(weights: ScoringEngineTests.defaultWeights)
+        let point = GridPoint(latitude: 46.0, longitude: 11.3, altitude: 30, forestType: .none, soilType: .other, aspect: 180)
+        let weather = WeatherData(rain14d: 60, avgTemperature: 16, avgHumidity: 80)
+        let result = engine.score(.init(point: point, weather: weather))
+        #expect(result.score < 0.1)
+    }
+
+    @Test("Zero weather yields near-zero final score regardless of habitat")
+    func zeroWeatherYieldsNearZero() {
+        let engine = ScoringEngine(weights: ScoringEngineTests.defaultWeights)
+        let point = GridPoint(latitude: 46.0, longitude: 11.3, altitude: 800, forestType: .mixed, soilType: .mixed, aspect: 360)
+        let weather = WeatherData(rain14d: 0, avgTemperature: 2, avgHumidity: 0)
+        let result = engine.score(.init(point: point, weather: weather))
+        #expect(result.score < 0.05)
     }
 }

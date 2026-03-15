@@ -30,11 +30,21 @@ struct WeatherConfig: Codable, Sendable {
 }
 
 struct ScoringWeights: Codable, Sendable {
-    let forest: Double
-    let rain14d: Double
-    let temperature: Double
-    let altitude: Double
-    let soil: Double
+    let base: BaseWeights
+    let weather: WeatherScoringWeights
+    let humidityMultiplierMin: Double
+
+    struct BaseWeights: Codable, Sendable {
+        let forest: Double
+        let altitude: Double
+        let soil: Double
+        let aspect: Double
+    }
+
+    struct WeatherScoringWeights: Codable, Sendable {
+        let rain14d: Double
+        let temperature: Double
+    }
 }
 
 struct MapConfig: Codable, Sendable {

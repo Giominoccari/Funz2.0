@@ -67,10 +67,15 @@ actor PipelineRunner {
             "duration": "\(ContinuousClock.now - phaseStart4)"
         ])
 
-        let avgScore = results.isEmpty ? 0 : results.map(\.score).reduce(0, +) / Double(results.count)
+        let count = Double(results.count)
+        let avgScore = results.isEmpty ? 0 : results.map(\.score).reduce(0, +) / count
+        let avgBase = results.isEmpty ? 0 : results.map(\.baseScore).reduce(0, +) / count
+        let avgWeather = results.isEmpty ? 0 : results.map(\.weatherScore).reduce(0, +) / count
         logger.info("Scoring complete", metadata: [
             "totalPoints": "\(results.count)",
             "avgScore": "\(String(format: "%.3f", avgScore))",
+            "avgBaseScore": "\(String(format: "%.3f", avgBase))",
+            "avgWeatherScore": "\(String(format: "%.3f", avgWeather))",
             "totalDuration": "\(ContinuousClock.now - runStart)"
         ])
 

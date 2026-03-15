@@ -8,11 +8,15 @@ pipeline:
   tileZoomMin: 6
   tileZoomMax: 12
   scoringWeights:
-    forest: 0.30
-    rain14d: 0.25
-    temperature: 0.20
-    altitude: 0.15
-    soil: 0.10
+    base:
+      forest: 0.40
+      altitude: 0.25
+      soil: 0.20
+      aspect: 0.15
+    weather:
+      rain14d: 0.55
+      temperature: 0.45
+    humidityMultiplierMin: 0.4
   weather:
     baseURL: "https://archive-api.open-meteo.com/v1/archive"
     maxConcurrentRequests: 50

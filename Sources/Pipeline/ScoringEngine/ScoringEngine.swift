@@ -12,31 +12,39 @@ struct ScoringEngine: Sendable {
         let latitude: Double
         let longitude: Double
         let score: Double
+        let baseScore: Double
+        let weatherScore: Double
     }
 
     func score(_ input: Input) -> Result {
+        // Static base score — habitat suitability
         let fs = ScoreFunctions.forestScore(input.point.forestType)
+        let als = ScoreFunctions.altitudeScore(input.point.altitude)
+        let ss = ScoreFunctions.soilScore(input.point.soilType)
+        let asp = ScoreFunctions.aspectScore(input.point.aspect)
+
+        let bw = weights.base
+        let baseScore = bw.forest * fs + bw.altitude * als + bw.soil * ss + bw.aspect * asp
+
+        // Phenological weather score — fruiting conditions
         let rs = ScoreFunctions.rainScore(input.weather.rain14d)
         let ts = ScoreFunctions.tempScore(input.weather.avgTemperature)
         let hs = ScoreFunctions.humidityScore(input.weather.avgHumidity)
-        let als = ScoreFunctions.altitudeScore(input.point.altitude)
-        let ss = ScoreFunctions.soilScore(input.point.soilType)
 
-        let raw = weights.forest * fs
-            + weights.rain14d * rs
-            + weights.temperature * ts
-            + weights.altitude * als
-            + weights.soil * ss
+        let ww = weights.weather
+        let rawWeather = ww.rain14d * rs + ww.temperature * ts
+        let humidityMultiplier = weights.humidityMultiplierMin
+            + (1.0 - weights.humidityMultiplierMin) * hs
+        let weatherScore = rawWeather * humidityMultiplier
 
-        // Humidity is not in the base config weights (5 weights sum to 1.0)
-        // but we use it as a multiplier: low humidity penalizes the score
-        let humidityMultiplier = 0.5 + 0.5 * hs // range [0.5 .. 1.0]
-        let finalScore = min(1.0, max(0.0, raw * humidityMultiplier))
+        let finalScore = min(1.0, max(0.0, baseScore * weatherScore))
 
         return Result(
             latitude: input.point.latitude,
             longitude: input.point.longitude,
-            score: finalScore
+            score: finalScore,
+            baseScore: baseScore,
+            weatherScore: weatherScore
         )
     }
 

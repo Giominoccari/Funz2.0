@@ -16,7 +16,7 @@ Stato avanzamento rispetto alle fasi definite in `architecture.md`.
 ## Beta (mese 3-4)
 
 - [x] Pipeline automatizzata con Open-Meteo reale + GeoDataLoader reale
-- [ ] ScoringEngine v1 con pesi fissi da config YAML
+- [x] ScoringEngine v1 con pesi fissi da config YAML
 - [ ] SubscriptionModule + Stripe (free vs pro)
 - [ ] Deploy ECS Fargate (api + worker)
 - [ ] CI/CD GitHub Actions
@@ -162,3 +162,26 @@ Migrata sorgente dati altitudine da Open-Meteo Elevation API a raster Copernicus
 - **`import-geodata.sh` esteso**: download automatico tile Copernicus DEM GLO-25 (25m) da AWS Open Data, merge con `gdal_merge.py`, generazione raster aspetto con `gdaldem aspect`, import in PostGIS con `raster2pgsql`
 - **Startup validation**: all'avvio l'app verifica che `copernicus_dem` esista e contenga dati
 - **Cleanup**: rimossi `OpenMeteoAltitudeClient`, `CachedAltitudeClient`, `ElevationResponse` e relativi test. Rimossa `GeoDataConfig` e sezione `geoData` da `app.yaml` (non piu necessarie). AdminController usa direttamente `PostGISAltitudeClient`
+
+### ScoringEngine v1 — Two-Layer Model (2026-03-15)
+
+Reimplementato lo ScoringEngine con modello a due livelli calibrato su ricerca micologica per Porcini (Boletus edulis):
+
+**Modello two-layer multiplicativo**: `finalScore = baseScore × weatherScore`
+- **Base score** (habitat statico): forest type (40%) + altitude (25%) + soil type (20%) + aspect/esposizione (15%). Cambia solo quando cambiano i dati geo statici
+- **Weather score** (fenologia meteo): rain14d (55%) + temperature (45%), con moltiplicatore umidità [0.4–1.0]. Cambia ad ogni run giornaliero
+- Modello multiplicativo: zero habitat (no foresta) → zero score indipendentemente dal meteo. Zero pioggia → near-zero indipendentemente dall'habitat
+
+**Curve calibrate su ricerca Porcini**:
+- **ForestType**: coniferous alzato da 0.6 a 0.80 (abete rosso/pino/abete sono ospiti primari). Broadleaf 0.85 (quercia/faggio/castagno). Mixed 1.0
+- **SoilType**: mixed humus-rich ora top (1.0, era 0.8). Calcareous 0.85 (era 1.0). Siliceous 0.70 (era 0.5). pH ideale 5.5–6.5
+- **Temperature**: plateau ottimale 12–20°C (era 15–22°C). Range autunnale 4–12°C con score parziale (porcini autunnali). Soglia freddo abbassata a 4°C
+- **Pioggia**: plateau ottimale 50–90mm/14gg (era 40–80mm). Floor a 0.1 per pioggia estrema (mai zero se c'è acqua)
+- **Altitudine**: plateau ottimale 400–1800m (era 400–1200m). Porcini trovati fino a 2400m nelle Alpi. Sopra 2400m: 0.1 (raro ma possibile)
+- **Aspect** (NUOVA funzione): curva coseno — nord=1.0 (trattiene umidità), est/ovest=0.65, sud=0.30 (asciuga). Terreno piano=0.7
+
+**Config ristrutturata**: `scoringWeights` in `app.yaml` ora nested con `base:` (4 pesi, sum=1.0) e `weather:` (2 pesi, sum=1.0) + `humidityMultiplierMin: 0.4`
+
+**Diagnostica**: `ScoringEngine.Result` ora espone `baseScore` e `weatherScore` oltre al `score` finale. `PipelineRunner` logga medie per layer
+
+**Test**: 32 test ScoringEngine (+12 nuovi: aspectScore 4, layer independence 2, multiplicative model 2, result fields 1, existing updated 3). ConfigLoader tests aggiornati per struttura nested. TileGenerator tests aggiornati per nuovi campi Result

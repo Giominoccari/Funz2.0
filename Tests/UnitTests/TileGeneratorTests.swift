@@ -49,7 +49,7 @@ struct TileGeneratorTests {
 
     @Test("IDW interpolation at exact point returns that score")
     func idwExactPoint() {
-        let results = [ScoringEngine.Result(latitude: 46.0, longitude: 11.0, score: 0.75)]
+        let results = [ScoringEngine.Result(latitude: 46.0, longitude: 11.0, score: 0.75, baseScore: 0.75, weatherScore: 1.0)]
         let idw = IDWInterpolator(results: results)
         let score = idw.interpolate(latitude: 46.0, longitude: 11.0)
         #expect(score != nil)
@@ -59,8 +59,8 @@ struct TileGeneratorTests {
     @Test("IDW interpolation between two equidistant points averages")
     func idwEquidistant() {
         let results = [
-            ScoringEngine.Result(latitude: 46.0, longitude: 11.0, score: 0.4),
-            ScoringEngine.Result(latitude: 46.0, longitude: 11.01, score: 0.8),
+            ScoringEngine.Result(latitude: 46.0, longitude: 11.0, score: 0.4, baseScore: 0.4, weatherScore: 1.0),
+            ScoringEngine.Result(latitude: 46.0, longitude: 11.01, score: 0.8, baseScore: 0.8, weatherScore: 1.0),
         ]
         let idw = IDWInterpolator(results: results)
         let score = idw.interpolate(latitude: 46.0, longitude: 11.005)
@@ -70,7 +70,7 @@ struct TileGeneratorTests {
 
     @Test("IDW interpolation returns nil when no nearby data")
     func idwNoData() {
-        let results = [ScoringEngine.Result(latitude: 46.0, longitude: 11.0, score: 0.5)]
+        let results = [ScoringEngine.Result(latitude: 46.0, longitude: 11.0, score: 0.5, baseScore: 0.5, weatherScore: 1.0)]
         let idw = IDWInterpolator(results: results, searchRadius: 0.01)
         let score = idw.interpolate(latitude: 47.0, longitude: 12.0)
         #expect(score == nil)
@@ -85,7 +85,7 @@ struct TileGeneratorTests {
         for lat in stride(from: 45.8, through: 46.5, by: 0.05) {
             for lon in stride(from: 10.8, through: 11.8, by: 0.05) {
                 let score = 0.3 + 0.4 * (lat - 45.8) / 0.7
-                results.append(.init(latitude: lat, longitude: lon, score: score))
+                results.append(.init(latitude: lat, longitude: lon, score: score, baseScore: score, weatherScore: 1.0))
             }
         }
 
@@ -100,7 +100,7 @@ struct TileGeneratorTests {
         var results: [ScoringEngine.Result] = []
         for lat in stride(from: 45.8, through: 46.5, by: 0.05) {
             for lon in stride(from: 10.8, through: 11.8, by: 0.05) {
-                results.append(.init(latitude: lat, longitude: lon, score: 0.5))
+                results.append(.init(latitude: lat, longitude: lon, score: 0.5, baseScore: 0.5, weatherScore: 1.0))
             }
         }
 
@@ -125,7 +125,7 @@ struct TileGeneratorTests {
         var results: [ScoringEngine.Result] = []
         for lat in stride(from: 45.8, through: 46.5, by: 0.05) {
             for lon in stride(from: 10.8, through: 11.8, by: 0.05) {
-                results.append(.init(latitude: lat, longitude: lon, score: 0.6))
+                results.append(.init(latitude: lat, longitude: lon, score: 0.6, baseScore: 0.6, weatherScore: 1.0))
             }
         }
 

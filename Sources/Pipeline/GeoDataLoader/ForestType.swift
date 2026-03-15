@@ -9,8 +9,8 @@ enum ForestType: String, Codable, Sendable {
     var score: Double {
         switch self {
         case .mixed:      return 1.0
-        case .broadleaf:  return 0.8
-        case .coniferous: return 0.6
+        case .broadleaf:  return 0.85
+        case .coniferous: return 0.80
         case .none:       return 0.0
         }
     }
