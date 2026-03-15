@@ -11,7 +11,7 @@ Stato avanzamento rispetto alle fasi definite in `architecture.md`.
 - [x] UserModule base (profilo, placeholder foto)
 - [x] Pipeline manuale con dati meteo mock e griglia ridotta (provincia test)
 - [ ] Tile statici caricati a mano su S3
-- [ ] App iOS che visualizza tile su MapLibre
+- [ ] map  che visualizza tile su MapLibre
 
 ## Beta (mese 3-4)
 
@@ -82,8 +82,6 @@ Implementata la pipeline completa con dati mock e griglia ridotta (provincia Tre
 - **ScoringEngine**: struct pura, nessun side effect. Formula da architecture.md con 5 pesi da config + moltiplicatore umidità. Funzioni score individuali con curve realistiche (rain ottimale 40-80mm, temp ottimale 15-22°C, altitude ottimale 400-1200m)
 - **PipelineRunner**: actor orchestratore con dependency injection dei 3 client. Fasi: grid → geo enrichment → weather fetch → scoring. Batch processing con `TaskGroup`. Log dettagliati per fase con durata e conteggio record
 - **Test**: 34 test (ScoringEngine 20, ConfigLoader 5, GridGenerator 6) — tutti passing
-<<<<<<< Updated upstream
-=======
 
 ### TileGenerator + S3Uploader (2026-03-08)
 
@@ -164,4 +162,3 @@ Migrata sorgente dati altitudine da Open-Meteo Elevation API a raster Copernicus
 - **`import-geodata.sh` esteso**: download automatico tile Copernicus DEM GLO-25 (25m) da AWS Open Data, merge con `gdal_merge.py`, generazione raster aspetto con `gdaldem aspect`, import in PostGIS con `raster2pgsql`
 - **Startup validation**: all'avvio l'app verifica che `copernicus_dem` esista e contenga dati
 - **Cleanup**: rimossi `OpenMeteoAltitudeClient`, `CachedAltitudeClient`, `ElevationResponse` e relativi test. Rimossa `GeoDataConfig` e sezione `geoData` da `app.yaml` (non piu necessarie). AdminController usa direttamente `PostGISAltitudeClient`
->>>>>>> Stashed changes

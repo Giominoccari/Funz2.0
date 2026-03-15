@@ -35,11 +35,6 @@ func configure(_ app: Application) async throws {
     app.jwtKeys = await JWTKeyCollection().add(rsa: rsaKey, digestAlgorithm: .sha256)
     logger.info("JWT RS256 configured")
 
-<<<<<<< Updated upstream
-    // Modules
-    try AuthModule.configure(app)
-    try UserModule.configure(app)
-=======
     // Static files (Public/)
     app.middleware.use(FileMiddleware(publicDirectory: app.directory.publicDirectory))
 
@@ -48,7 +43,6 @@ func configure(_ app: Application) async throws {
     try AuthModule.configure(app)
     try MapModule.configure(app)
     try AdminModule.configure(app)
->>>>>>> Stashed changes
 
     // Migrations (auto-migrate in development)
     app.migrations.add(CreateRasterExtensions())

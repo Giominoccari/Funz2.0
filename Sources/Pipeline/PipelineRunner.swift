@@ -8,17 +8,20 @@ actor PipelineRunner {
     private let weatherClient: any WeatherClient
     private let forestClient: any ForestCoverageClient
     private let altitudeClient: any AltitudeClient
+    private let tileUploader: any TileUploader
 
     init(
         config: PipelineConfig,
         weatherClient: any WeatherClient,
         forestClient: any ForestCoverageClient,
-        altitudeClient: any AltitudeClient
+        altitudeClient: any AltitudeClient,
+        tileUploader: any TileUploader = MockTileUploader()
     ) {
         self.config = config
         self.weatherClient = weatherClient
         self.forestClient = forestClient
         self.altitudeClient = altitudeClient
+        self.tileUploader = tileUploader
     }
 
     func run(bbox: BoundingBox) async throws -> [ScoringEngine.Result] {
@@ -74,9 +77,6 @@ actor PipelineRunner {
         return results
     }
 
-<<<<<<< Updated upstream
-    private func enrichWithGeoData(_ points: [GridPoint]) async throws -> [GridPoint] {
-=======
     /// Full pipeline: score → generate tiles → upload to S3.
     func runFull(bbox: BoundingBox, date: String) async throws {
         let fullStart = ContinuousClock.now
@@ -113,7 +113,6 @@ actor PipelineRunner {
     }
 
     private func enrichWithGeoData(_ points: [GridPoint]) async -> [GridPoint] {
->>>>>>> Stashed changes
         let batchSize = config.batchSize
         var enriched: [GridPoint] = []
         enriched.reserveCapacity(points.count)
