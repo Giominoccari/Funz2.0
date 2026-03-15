@@ -8,7 +8,10 @@ struct MapController: RouteCollection, Sendable {
 
     func boot(routes: RoutesBuilder) throws {
         let map = routes.grouped("map")
-        map.get("tiles", ":date", ":z", ":x", ":y", use: getTile)
+        // Tile endpoint: JWT auth + subscription entitlements for zoom gating
+        let protectedMap = map.grouped(JWTAuthMiddleware(), SubscriptionMiddleware())
+        protectedMap.get("tiles", ":date", ":z", ":x", ":y", use: getTile)
+        // Dates listing remains public
         map.get("dates", use: getDates)
     }
 
@@ -24,9 +27,15 @@ struct MapController: RouteCollection, Sendable {
             throw Abort(.badRequest, reason: "Invalid tile parameters")
         }
 
-        // Validate zoom range
+        // Validate zoom range (absolute bounds)
         guard (6...12).contains(z) else {
             throw Abort(.badRequest, reason: "Zoom must be between 6 and 12")
+        }
+
+        // Enforce subscription tier zoom limit
+        let maxZoom = req.planEntitlements.maxZoom
+        guard z <= maxZoom else {
+            throw Abort(.forbidden, reason: "Zoom level \(z) requires a higher subscription tier (your max: \(maxZoom)).")
         }
 
         // 1. Try local directory first

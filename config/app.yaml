@@ -34,3 +34,20 @@ s3:
   tileBucket: funghi-map-tiles
   region: eu-south-1
   uploadBatchSize: 50
+
+subscription:
+  checkoutSuccessURL: "https://funghimap.it/checkout/success"
+  checkoutCancelURL: "https://funghimap.it/checkout/cancel"
+  stripePriceIDs:
+    pro: "price_PLACEHOLDER_SET_IN_ENV"
+  plans:
+    free:
+      maxZoom: 9
+      historyDays: 0
+      features: []
+    pro:
+      maxZoom: 12
+      historyDays: 90
+      features:
+        - "hd_tiles"
+        - "historical_data"

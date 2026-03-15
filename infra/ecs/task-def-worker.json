@@ -1,0 +1,46 @@
+{
+  "family": "funghi-map-worker",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "2048",
+  "memory": "4096",
+  "executionRoleArn": "arn:aws:iam::ACCOUNT_ID:role/funghi-map-ecs-execution",
+  "taskRoleArn": "arn:aws:iam::ACCOUNT_ID:role/funghi-map-worker-task",
+  "containerDefinitions": [
+    {
+      "name": "worker",
+      "image": "ACCOUNT_ID.dkr.ecr.eu-south-1.amazonaws.com/funghi-map:latest",
+      "essential": true,
+      "command": ["worker", "--bbox", "italy"],
+      "environment": [
+        { "name": "LOG_LEVEL", "value": "info" }
+      ],
+      "secrets": [
+        {
+          "name": "DATABASE_URL",
+          "valueFrom": "arn:aws:secretsmanager:eu-south-1:ACCOUNT_ID:secret:funghi-map/database-url"
+        },
+        {
+          "name": "REDIS_URL",
+          "valueFrom": "arn:aws:secretsmanager:eu-south-1:ACCOUNT_ID:secret:funghi-map/redis-url"
+        },
+        {
+          "name": "JWT_PRIVATE_KEY_FILE",
+          "valueFrom": "arn:aws:secretsmanager:eu-south-1:ACCOUNT_ID:secret:funghi-map/jwt-private-key-file"
+        },
+        {
+          "name": "AWS_REGION",
+          "valueFrom": "arn:aws:secretsmanager:eu-south-1:ACCOUNT_ID:secret:funghi-map/aws-region"
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/funghi-map-worker",
+          "awslogs-region": "eu-south-1",
+          "awslogs-stream-prefix": "worker"
+        }
+      }
+    }
+  ]
+}

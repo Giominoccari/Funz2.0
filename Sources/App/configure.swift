@@ -44,9 +44,10 @@ func configure(_ app: Application) async throws {
     // Static files (Public/)
     app.middleware.use(FileMiddleware(publicDirectory: app.directory.publicDirectory))
 
-    // Modules (UserModule first: CreateUser must run before CreateRefreshToken)
+    // Modules (UserModule first: CreateUser must run before CreateRefreshToken/CreateSubscription)
     try UserModule.configure(app)
     try AuthModule.configure(app)
+    try SubscriptionModule.configure(app)
     try MapModule.configure(app)
     try AdminModule.configure(app)
 
@@ -74,6 +75,9 @@ func configure(_ app: Application) async throws {
             logger.info("PostGIS DEM validated", metadata: ["tiles": "\(count)"])
         }
     }
+
+    // Commands
+    app.asyncCommands.use(WorkerCommand(), as: "worker")
 
     // Routes
     try routes(app)

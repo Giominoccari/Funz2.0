@@ -17,8 +17,8 @@ Stato avanzamento rispetto alle fasi definite in `architecture.md`.
 
 - [x] Pipeline automatizzata con Open-Meteo reale + GeoDataLoader reale
 - [x] ScoringEngine v1 con pesi fissi da config YAML
-- [ ] SubscriptionModule + Stripe (free vs pro)
-- [ ] Deploy ECS Fargate (api + worker)
+- [x] SubscriptionModule + Stripe (free vs pro)
+- [x] Deploy ECS Fargate (api + worker)
 - [ ] CI/CD GitHub Actions
 
 ## v1.0 (mese 5-6)
@@ -185,3 +185,69 @@ Reimplementato lo ScoringEngine con modello a due livelli calibrato su ricerca m
 **Diagnostica**: `ScoringEngine.Result` ora espone `baseScore` e `weatherScore` oltre al `score` finale. `PipelineRunner` logga medie per layer
 
 **Test**: 32 test ScoringEngine (+12 nuovi: aspectScore 4, layer independence 2, multiplicative model 2, result fields 1, existing updated 3). ConfigLoader tests aggiornati per struttura nested. TileGenerator tests aggiornati per nuovi campi Result
+
+### SubscriptionModule + Stripe (2026-03-15)
+
+Implementato il modulo abbonamenti con sistema di entitlements config-driven per gating flessibile:
+
+**Architettura entitlements**:
+- **`PlanEntitlements`**: struct Codable che definisce i limiti di ogni piano (`maxZoom`, `historyDays`, `features: [String]`). Tutti i piani sono definiti in `config/app.yaml` sotto `subscription.plans`. Per aggiungere nuovi gate in futuro (es. map variety, API access), basta aggiungere campi a `PlanEntitlements` e configurarli in YAML
+- **`SubscriptionMiddleware`**: dopo `JWTAuthMiddleware`, carica la subscription dell'utente dal DB, risolve il piano → entitlements da config, e li attacca a `req.planEntitlements`. Qualsiasi controller downstream può verificare i limiti senza conoscere Stripe
+- Fallback automatico a entitlements `free` se l'utente non ha subscription o è scaduta
+
+**Subscription model + migration**:
+- Tabella `subscriptions` con FK → `users(id)`, unique su `user_id` e `stripe_customer_id`
+- Campi: `plan`, `status`, `stripe_customer_id`, `stripe_subscription_id`, `current_period_end`
+- `isActive` computed: verifica sia `status == "active"` che `currentPeriodEnd > now`
+
+**SubscriptionController** — 3 endpoint:
+- `GET /subscription/status` — piano corrente + entitlements (JWT protetto)
+- `POST /subscription/checkout` — crea sessione Stripe Checkout (JWT protetto). Valida che il piano richiesto esista in config
+- `POST /subscription/webhook` — webhook Stripe con verifica firma HMAC-SHA256. Gestisce: `checkout.session.completed` (upsert subscription), `customer.subscription.updated` (sync stato/scadenza), `customer.subscription.deleted` (downgrade a free)
+
+**StripeClient**: client HTTP leggero che usa `Vapor.Client` (nessuna dipendenza SDK esterna). Verifica firma webhook con `Crypto.HMAC<SHA256>` + tolleranza timestamp 5 minuti
+
+**MapController aggiornato**: endpoint tile ora richiede JWT + `SubscriptionMiddleware`. Zoom > `planEntitlements.maxZoom` → 403 Forbidden. Endpoint `/map/dates` resta pubblico
+
+**Config**: aggiunta sezione `subscription` in `app.yaml` con `checkoutSuccessURL`, `checkoutCancelURL`, `stripePriceIDs` (per piano), e `plans` (entitlements per piano)
+
+**Test**: 13 test (PlanEntitlements 2, Subscription model 4, SubscriptionConfig 3, Stripe webhook signature 4) — tutti passing
+
+### Deploy ECS Fargate — api + worker (2026-03-15)
+
+Infrastruttura completa per deploy su AWS ECS Fargate con due container (api always-on + worker on-demand):
+
+**Dockerfile multi-stage** (`infra/Dockerfile`):
+- Stage 1: build Swift 6 release con static linking su `swift:6.0-jammy`
+- Stage 2: runtime minimale `ubuntu:22.04` (~80MB). Binary + config + Public/ copiati dal build stage
+- Singola immagine, due modalità: `CMD ["serve", ...]` (default, API) oppure override `["worker", "--bbox", "italy"]` per pipeline
+- Health check integrato per API mode
+
+**WorkerCommand** (`Sources/App/Commands/WorkerCommand.swift`):
+- `AsyncCommand` Vapor registrato come `worker`. Esegue la pipeline synchronous e poi esce (ideale per ECS scheduled task)
+- Opzioni CLI: `--bbox` (italy/trentino, default italy), `--date` (YYYY-MM-DD, default oggi Rome TZ)
+- Stesso setup client di `AdminController`: OpenMeteo → Redis cache, PostGIS forest/altitude
+- `BoundingBox.italy` aggiunto (bbox 36.6–47.1°N, 6.6–18.5°E)
+
+**ECS Task Definitions** (`infra/ecs/`):
+- `task-def-api.json`: 0.5 vCPU / 1 GB RAM, porta 8080, health check `/health`. Segreti da Secrets Manager (DATABASE_URL, REDIS_URL, JWT, Stripe, admin key)
+- `task-def-worker.json`: 2 vCPU / 4 GB RAM, nessuna porta esposta. Segreti ridotti (no Stripe). Command override: `["worker", "--bbox", "italy"]`
+
+**CloudFormation stack** (`infra/cloudformation/stack.yaml`):
+- ECR repository con lifecycle policy (10 immagini max)
+- ECS cluster con Container Insights
+- CloudWatch log groups (30 giorni retention) per api e worker
+- IAM roles: execution (pull image + read secrets), api-task (S3 read tile), worker-task (S3 upload + CloudFront invalidation), EventBridge → RunTask
+- Security groups: ALB (80/443 pubblico) → ECS (8080 solo da ALB)
+- ALB internet-facing con target group e health check su `/health`
+- API service (always-on, 1 task, rolling deploy 100-200%)
+- EventBridge rule: `cron(0 2 * * ? *)` lancia worker task ogni notte alle 02:00 UTC
+- Parametri: VPC/subnet IDs, image URI, ARN di tutti i segreti
+
+**Deploy script** (`infra/scripts/deploy.sh`):
+- ECR login → Docker build (linux/amd64) → push con tag git SHA + latest
+- Registra nuove task definition da template JSON (sostituisce ACCOUNT_ID e image)
+- Force new deployment su API service + wait for stability
+- Opzioni: `--api-only`, `--worker-only`
+
+**Makefile**: aggiunti `make docker-build`, `make deploy`, `make deploy-api`, `make deploy-worker`, `make cfn-deploy`

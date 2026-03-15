@@ -1,0 +1,439 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Funghi Map — ECS Fargate infrastructure.
+  Two tasks: api (always-on) + worker (scheduled nightly).
+
+# ─── Parameters ─────────────────────────────────────────────
+Parameters:
+  Environment:
+    Type: String
+    Default: production
+    AllowedValues: [production, staging]
+
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: Existing VPC ID
+
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet::Id
+    Description: Public subnet for ALB (AZ-a)
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet::Id
+    Description: Public subnet for ALB (AZ-b)
+
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet::Id
+    Description: Private subnet for ECS tasks (AZ-a)
+
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet::Id
+    Description: Private subnet for ECS tasks (AZ-b)
+
+  ImageUri:
+    Type: String
+    Description: ECR image URI (e.g. 123456789.dkr.ecr.eu-south-1.amazonaws.com/funghi-map:latest)
+
+  DatabaseSecretArn:
+    Type: String
+    Description: Secrets Manager ARN for DATABASE_URL
+
+  RedisSecretArn:
+    Type: String
+    Description: Secrets Manager ARN for REDIS_URL
+
+  JwtKeySecretArn:
+    Type: String
+    Description: Secrets Manager ARN for JWT_PRIVATE_KEY_FILE
+
+  StripeSecretKeyArn:
+    Type: String
+    Description: Secrets Manager ARN for STRIPE_SECRET_KEY
+
+  StripeWebhookSecretArn:
+    Type: String
+    Description: Secrets Manager ARN for STRIPE_WEBHOOK_SECRET
+
+  AdminApiKeySecretArn:
+    Type: String
+    Description: Secrets Manager ARN for ADMIN_API_KEY
+
+  WorkerSchedule:
+    Type: String
+    Default: "cron(0 2 * * ? *)"
+    Description: EventBridge schedule for nightly worker (default 02:00 UTC)
+
+# ─── Resources ──────────────────────────────────────────────
+Resources:
+
+  # ── ECR Repository ──────────────────────────────────────
+  ECRRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: funghi-map
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {
+            "rules": [
+              {
+                "rulePriority": 1,
+                "description": "Keep last 10 images",
+                "selection": {
+                  "tagStatus": "any",
+                  "countType": "imageCountMoreThan",
+                  "countNumber": 10
+                },
+                "action": { "type": "expire" }
+              }
+            ]
+          }
+
+  # ── ECS Cluster ─────────────────────────────────────────
+  ECSCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Sub "funghi-map-${Environment}"
+      ClusterSettings:
+        - Name: containerInsights
+          Value: enabled
+
+  # ── CloudWatch Log Groups ───────────────────────────────
+  ApiLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /ecs/funghi-map-api
+      RetentionInDays: 30
+
+  WorkerLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /ecs/funghi-map-worker
+      RetentionInDays: 30
+
+  # ── IAM: ECS Execution Role (pull image, read secrets) ──
+  ECSExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "funghi-map-ecs-execution-${Environment}"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Policies:
+        - PolicyName: SecretsAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource:
+                  - !Ref DatabaseSecretArn
+                  - !Ref RedisSecretArn
+                  - !Ref JwtKeySecretArn
+                  - !Ref StripeSecretKeyArn
+                  - !Ref StripeWebhookSecretArn
+                  - !Ref AdminApiKeySecretArn
+
+  # ── IAM: API Task Role (S3 signed URLs, CloudFront) ────
+  ApiTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "funghi-map-api-task-${Environment}"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: S3TileRead
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                Resource: arn:aws:s3:::funghi-map-tiles/*
+
+  # ── IAM: Worker Task Role (S3 upload, CloudFront invalidation) ──
+  WorkerTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "funghi-map-worker-task-${Environment}"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: S3TileUpload
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:PutObjectAcl
+                Resource: arn:aws:s3:::funghi-map-tiles/*
+        - PolicyName: CloudFrontInvalidation
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - cloudfront:CreateInvalidation
+                Resource: "*"
+
+  # ── Security Groups ─────────────────────────────────────
+  ALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: ALB — allow inbound HTTP/HTTPS
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+
+  ECSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: ECS tasks — allow inbound from ALB only
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          SourceSecurityGroupId: !Ref ALBSecurityGroup
+
+  # ── Application Load Balancer ───────────────────────────
+  ALB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub "funghi-map-alb-${Environment}"
+      Scheme: internet-facing
+      Type: application
+      Subnets:
+        - !Ref PublicSubnet1
+        - !Ref PublicSubnet2
+      SecurityGroups:
+        - !Ref ALBSecurityGroup
+
+  ALBTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub "funghi-api-tg-${Environment}"
+      Port: 8080
+      Protocol: HTTP
+      VpcId: !Ref VpcId
+      TargetType: ip
+      HealthCheckPath: /health
+      HealthCheckIntervalSeconds: 30
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+
+  ALBListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref ALB
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref ALBTargetGroup
+
+  # ── ECS Task Definitions ────────────────────────────────
+  ApiTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: funghi-map-api
+      NetworkMode: awsvpc
+      RequiresCompatibilities: [FARGATE]
+      Cpu: "512"
+      Memory: "1024"
+      ExecutionRoleArn: !GetAtt ECSExecutionRole.Arn
+      TaskRoleArn: !GetAtt ApiTaskRole.Arn
+      ContainerDefinitions:
+        - Name: api
+          Image: !Ref ImageUri
+          Essential: true
+          Command: ["serve", "--hostname", "0.0.0.0", "--port", "8080"]
+          PortMappings:
+            - ContainerPort: 8080
+              Protocol: tcp
+          Environment:
+            - Name: LOG_LEVEL
+              Value: info
+          Secrets:
+            - Name: DATABASE_URL
+              ValueFrom: !Ref DatabaseSecretArn
+            - Name: REDIS_URL
+              ValueFrom: !Ref RedisSecretArn
+            - Name: JWT_PRIVATE_KEY_FILE
+              ValueFrom: !Ref JwtKeySecretArn
+            - Name: STRIPE_SECRET_KEY
+              ValueFrom: !Ref StripeSecretKeyArn
+            - Name: STRIPE_WEBHOOK_SECRET
+              ValueFrom: !Ref StripeWebhookSecretArn
+            - Name: ADMIN_API_KEY
+              ValueFrom: !Ref AdminApiKeySecretArn
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref ApiLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: api
+          HealthCheck:
+            Command: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
+            Interval: 30
+            Timeout: 5
+            Retries: 3
+            StartPeriod: 10
+
+  WorkerTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: funghi-map-worker
+      NetworkMode: awsvpc
+      RequiresCompatibilities: [FARGATE]
+      Cpu: "2048"
+      Memory: "4096"
+      ExecutionRoleArn: !GetAtt ECSExecutionRole.Arn
+      TaskRoleArn: !GetAtt WorkerTaskRole.Arn
+      ContainerDefinitions:
+        - Name: worker
+          Image: !Ref ImageUri
+          Essential: true
+          Command: ["worker", "--bbox", "italy"]
+          Environment:
+            - Name: LOG_LEVEL
+              Value: info
+          Secrets:
+            - Name: DATABASE_URL
+              ValueFrom: !Ref DatabaseSecretArn
+            - Name: REDIS_URL
+              ValueFrom: !Ref RedisSecretArn
+            - Name: JWT_PRIVATE_KEY_FILE
+              ValueFrom: !Ref JwtKeySecretArn
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref WorkerLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: worker
+
+  # ── ECS Service (API — always running) ──────────────────
+  ApiService:
+    Type: AWS::ECS::Service
+    DependsOn: ALBListener
+    Properties:
+      ServiceName: funghi-map-api
+      Cluster: !Ref ECSCluster
+      TaskDefinition: !Ref ApiTaskDefinition
+      DesiredCount: 1
+      LaunchType: FARGATE
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: DISABLED
+          Subnets:
+            - !Ref PrivateSubnet1
+            - !Ref PrivateSubnet2
+          SecurityGroups:
+            - !Ref ECSSecurityGroup
+      LoadBalancers:
+        - ContainerName: api
+          ContainerPort: 8080
+          TargetGroupArn: !Ref ALBTargetGroup
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 100
+        MaximumPercent: 200
+
+  # ── EventBridge: Nightly Worker Schedule ────────────────
+  WorkerScheduleRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub "funghi-map-worker-nightly-${Environment}"
+      Description: Trigger pipeline worker nightly at 02:00 UTC
+      ScheduleExpression: !Ref WorkerSchedule
+      State: ENABLED
+      Targets:
+        - Id: worker-task
+          Arn: !GetAtt ECSCluster.Arn
+          RoleArn: !GetAtt EventBridgeECSRole.Arn
+          EcsParameters:
+            TaskDefinitionArn: !Ref WorkerTaskDefinition
+            LaunchType: FARGATE
+            TaskCount: 1
+            NetworkConfiguration:
+              AwsVpcConfiguration:
+                AssignPublicIp: DISABLED
+                Subnets:
+                  - !Ref PrivateSubnet1
+                SecurityGroups:
+                  - !Ref ECSSecurityGroup
+
+  # ── IAM: EventBridge → ECS RunTask ─────────────────────
+  EventBridgeECSRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "funghi-map-eventbridge-ecs-${Environment}"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: RunECSTask
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: ecs:RunTask
+                Resource: !Ref WorkerTaskDefinition
+                Condition:
+                  ArnLike:
+                    ecs:cluster: !GetAtt ECSCluster.Arn
+              - Effect: Allow
+                Action: iam:PassRole
+                Resource:
+                  - !GetAtt ECSExecutionRole.Arn
+                  - !GetAtt WorkerTaskRole.Arn
+
+# ─── Outputs ────────────────────────────────────────────────
+Outputs:
+  ClusterName:
+    Value: !Ref ECSCluster
+
+  ApiServiceName:
+    Value: !GetAtt ApiService.Name
+
+  ALBDnsName:
+    Description: Public ALB endpoint
+    Value: !GetAtt ALB.DNSName
+
+  ECRRepositoryUri:
+    Value: !GetAtt ECRRepository.RepositoryUri
+
+  ApiLogGroup:
+    Value: !Ref ApiLogGroup
+
+  WorkerLogGroup:
+    Value: !Ref WorkerLogGroup

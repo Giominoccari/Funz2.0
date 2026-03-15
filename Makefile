@@ -5,7 +5,7 @@
 # handle complex values like PEM keys with spaces). Helper:
 LOAD_ENV = if [ -f .env ]; then while IFS= read -r _line || [ -n "$$_line" ]; do echo "$$_line" | grep -qE '^\s*($$|\#)' && continue; export "$$_line"; done < .env; fi
 
-.PHONY: up down restart build test db-setup status logs clean help
+.PHONY: up down restart build test db-setup status logs clean help docker-build deploy deploy-api deploy-worker cfn-deploy
 
 # ─── Start everything ───────────────────────────────────────────────
 up: ## Start Postgres + Redis, setup DB, build and run Vapor server
@@ -68,6 +68,27 @@ geodata-import: ## Download and import geodata into PostGIS (auto-downloads from
 geodata-check: ## Verify raster tables exist in PostGIS
 	@$(LOAD_ENV) && psql "$$DATABASE_URL" \
 		-c "SELECT 'corine_landcover' AS t, count(*) FROM corine_landcover UNION ALL SELECT 'esdac_soil', count(*) FROM esdac_soil UNION ALL SELECT 'copernicus_dem', count(*) FROM copernicus_dem UNION ALL SELECT 'dem_aspect', count(*) FROM dem_aspect;"
+
+# ─── Deploy (ECS Fargate) ──────────────────────────────────
+docker-build: ## Build Docker image locally (linux/amd64)
+	docker build --platform linux/amd64 -f infra/Dockerfile -t funghi-map:latest .
+
+deploy: ## Build, push to ECR, deploy API + worker to ECS Fargate
+	@bash infra/scripts/deploy.sh
+
+deploy-api: ## Deploy API service only
+	@bash infra/scripts/deploy.sh --api-only
+
+deploy-worker: ## Update worker task definition only
+	@bash infra/scripts/deploy.sh --worker-only
+
+cfn-deploy: ## Deploy/update CloudFormation stack (requires parameters file)
+	@echo "▶ Deploying CloudFormation stack..."
+	aws cloudformation deploy \
+		--template-file infra/cloudformation/stack.yaml \
+		--stack-name funghi-map-$${ENVIRONMENT:-production} \
+		--capabilities CAPABILITY_NAMED_IAM \
+		--parameter-overrides file://infra/cloudformation/params.json
 
 # ─── Clean ──────────────────────────────────────────────────────────
 clean: ## Remove Swift build artifacts

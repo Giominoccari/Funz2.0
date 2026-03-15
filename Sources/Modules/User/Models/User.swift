@@ -36,6 +36,9 @@ final class User: Model, Content, @unchecked Sendable {
     @Children(for: \.$user)
     var photos: [Photo]
 
+    @OptionalChild(for: \.$user)
+    var subscription: Subscription?
+
     init() {}
 
     init(id: UUID? = nil, email: String, passwordHash: String? = nil, appleUserID: String? = nil) {

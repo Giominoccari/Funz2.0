@@ -5,6 +5,14 @@ struct AppConfig: Codable, Sendable {
     let pipeline: PipelineConfig
     let map: MapConfig
     let s3: S3Config
+    let subscription: SubscriptionConfig
+}
+
+struct SubscriptionConfig: Codable, Sendable {
+    let checkoutSuccessURL: String
+    let checkoutCancelURL: String
+    let stripePriceIDs: [String: String]
+    let plans: [String: PlanEntitlements]
 }
 
 struct ServerConfig: Codable, Sendable {
