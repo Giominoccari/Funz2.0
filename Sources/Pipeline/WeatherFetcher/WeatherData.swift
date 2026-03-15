@@ -1,6 +1,6 @@
 import Foundation
 
-struct WeatherData: Sendable {
+struct WeatherData: Sendable, Codable {
     /// Cumulative rainfall over the last 14 days (mm)
     let rain14d: Double
     /// Average temperature over the last 7 days (°C)

@@ -17,6 +17,15 @@ struct PipelineConfig: Codable, Sendable {
     let tileZoomMin: Int
     let tileZoomMax: Int
     let scoringWeights: ScoringWeights
+    let weather: WeatherConfig
+}
+
+struct WeatherConfig: Codable, Sendable {
+    let baseURL: String
+    let maxConcurrentRequests: Int
+    let retryMaxAttempts: Int
+    let retryBaseDelayMs: Int
+    let cacheTTLSeconds: Int
 }
 
 struct ScoringWeights: Codable, Sendable {

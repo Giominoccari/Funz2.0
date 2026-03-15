@@ -13,6 +13,12 @@ pipeline:
     temperature: 0.20
     altitude: 0.15
     soil: 0.10
+  weather:
+    baseURL: "https://archive-api.open-meteo.com/v1/archive"
+    maxConcurrentRequests: 50
+    retryMaxAttempts: 3
+    retryBaseDelayMs: 500
+    cacheTTLSeconds: 86400
 
 map:
   tileSignedUrlTtlSeconds: 3600

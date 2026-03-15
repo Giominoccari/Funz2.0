@@ -3,6 +3,7 @@ import FluentPostgresDriver
 import JWTKit
 import Logging
 import Redis
+import SQLKit
 import Vapor
 
 func configure(_ app: Application) async throws {
@@ -34,12 +35,45 @@ func configure(_ app: Application) async throws {
     app.jwtKeys = await JWTKeyCollection().add(rsa: rsaKey, digestAlgorithm: .sha256)
     logger.info("JWT RS256 configured")
 
+<<<<<<< Updated upstream
     // Modules
     try AuthModule.configure(app)
     try UserModule.configure(app)
+=======
+    // Static files (Public/)
+    app.middleware.use(FileMiddleware(publicDirectory: app.directory.publicDirectory))
+
+    // Modules (UserModule first: CreateUser must run before CreateRefreshToken)
+    try UserModule.configure(app)
+    try AuthModule.configure(app)
+    try MapModule.configure(app)
+    try AdminModule.configure(app)
+>>>>>>> Stashed changes
 
     // Migrations (auto-migrate in development)
+    app.migrations.add(CreateRasterExtensions())
     try await app.autoMigrate()
+
+    // Validate PostGIS raster data (Copernicus DEM required for altitude)
+    let sqlDb = app.db as! any SQLDatabase
+    let tableCheck = try await sqlDb.raw("""
+        SELECT EXISTS (
+            SELECT 1 FROM information_schema.tables
+            WHERE table_name = 'copernicus_dem'
+        ) AS table_exists
+        """).all()
+    let tableExists = try tableCheck.first?.decode(column: "table_exists", as: Bool.self) ?? false
+    if !tableExists {
+        logger.warning("Table copernicus_dem does not exist — run 'make geodata-import'")
+    } else {
+        let rows = try await sqlDb.raw("SELECT count(*) AS c FROM copernicus_dem").all()
+        let count = try rows.first?.decode(column: "c", as: Int.self) ?? 0
+        if count == 0 {
+            logger.warning("copernicus_dem raster table is empty — run 'make geodata-import'")
+        } else {
+            logger.info("PostGIS DEM validated", metadata: ["tiles": "\(count)"])
+        }
+    }
 
     // Routes
     try routes(app)

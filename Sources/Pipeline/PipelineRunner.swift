@@ -35,7 +35,7 @@ actor PipelineRunner {
 
         // Phase 2: Enrich with geo data (forest, altitude, soil, aspect)
         let phaseStart2 = ContinuousClock.now
-        points = try await enrichWithGeoData(points)
+        points = await enrichWithGeoData(points)
         logger.info("Phase 2 — Geo data enrichment complete", metadata: [
             "points": "\(points.count)",
             "duration": "\(ContinuousClock.now - phaseStart2)"
@@ -43,7 +43,7 @@ actor PipelineRunner {
 
         // Phase 3: Fetch weather data
         let phaseStart3 = ContinuousClock.now
-        let weatherMap = try await fetchWeather(for: points)
+        let weatherMap = await fetchWeather(for: points)
         logger.info("Phase 3 — Weather fetch complete", metadata: [
             "points": "\(weatherMap.count)",
             "duration": "\(ContinuousClock.now - phaseStart3)"
@@ -74,77 +74,163 @@ actor PipelineRunner {
         return results
     }
 
+<<<<<<< Updated upstream
     private func enrichWithGeoData(_ points: [GridPoint]) async throws -> [GridPoint] {
+=======
+    /// Full pipeline: score → generate tiles → upload to S3.
+    func runFull(bbox: BoundingBox, date: String) async throws {
+        let fullStart = ContinuousClock.now
+
+        // Phases 1-4: Scoring
+        let results = try await run(bbox: bbox)
+
+        // Phase 5: Tile generation
+        let phaseStart5 = ContinuousClock.now
+        let tileGen = TileGenerator(
+            tileZoomMin: config.tileZoomMin,
+            tileZoomMax: config.tileZoomMax
+        )
+        let tiles = tileGen.generateAll(results: results, bbox: bbox)
+        logger.info("Phase 5 — Tile generation complete", metadata: [
+            "tiles": "\(tiles.count)",
+            "duration": "\(ContinuousClock.now - phaseStart5)"
+        ])
+
+        // Phase 6: S3 upload
+        let phaseStart6 = ContinuousClock.now
+        try await tileUploader.upload(tiles: tiles, date: date)
+        logger.info("Phase 6 — S3 upload complete", metadata: [
+            "tiles": "\(tiles.count)",
+            "duration": "\(ContinuousClock.now - phaseStart6)"
+        ])
+
+        logger.info("Full pipeline complete", metadata: [
+            "totalPoints": "\(results.count)",
+            "totalTiles": "\(tiles.count)",
+            "date": "\(date)",
+            "totalDuration": "\(ContinuousClock.now - fullStart)"
+        ])
+    }
+
+    private func enrichWithGeoData(_ points: [GridPoint]) async -> [GridPoint] {
+>>>>>>> Stashed changes
         let batchSize = config.batchSize
         var enriched: [GridPoint] = []
         enriched.reserveCapacity(points.count)
+        var failedCount = 0
 
         for batchStart in stride(from: 0, to: points.count, by: batchSize) {
             let batchEnd = min(batchStart + batchSize, points.count)
             let batch = points[batchStart..<batchEnd]
 
-            let batchResults = try await withThrowingTaskGroup(of: GridPoint.self) { group in
+            let batchResults = await withTaskGroup(
+                of: (GridPoint, Error?).self
+            ) { group in
                 for point in batch {
                     group.addTask {
-                        var p = point
-                        p.altitude = try await self.altitudeClient.altitude(
-                            latitude: point.latitude, longitude: point.longitude
-                        )
-                        p.forestType = try await self.forestClient.forestType(
-                            latitude: point.latitude, longitude: point.longitude
-                        )
-                        p.soilType = try await self.forestClient.soilType(
-                            latitude: point.latitude, longitude: point.longitude
-                        )
-                        p.aspect = try await self.altitudeClient.aspect(
-                            latitude: point.latitude, longitude: point.longitude
-                        )
-                        return p
+                        do {
+                            var p = point
+                            p.altitude = try await self.altitudeClient.altitude(
+                                latitude: point.latitude, longitude: point.longitude
+                            )
+                            p.forestType = try await self.forestClient.forestType(
+                                latitude: point.latitude, longitude: point.longitude
+                            )
+                            p.soilType = try await self.forestClient.soilType(
+                                latitude: point.latitude, longitude: point.longitude
+                            )
+                            p.aspect = try await self.altitudeClient.aspect(
+                                latitude: point.latitude, longitude: point.longitude
+                            )
+                            return (p, nil)
+                        } catch {
+                            return (point, error)
+                        }
                     }
                 }
-                var results: [GridPoint] = []
-                for try await result in group {
+                var results: [(GridPoint, Error?)] = []
+                for await result in group {
                     results.append(result)
                 }
                 return results
             }
 
-            enriched.append(contentsOf: batchResults)
+            for (point, error) in batchResults {
+                enriched.append(point)
+                if let error {
+                    failedCount += 1
+                    logger.warning("Geo enrichment failed for point", metadata: [
+                        "lat": "\(point.latitude)",
+                        "lon": "\(point.longitude)",
+                        "error": "\(error)"
+                    ])
+                }
+            }
+        }
+
+        if failedCount > 0 {
+            logger.warning("Geo enrichment completed with failures", metadata: [
+                "failed": "\(failedCount)",
+                "total": "\(points.count)"
+            ])
         }
 
         return enriched
     }
 
-    private func fetchWeather(for points: [GridPoint]) async throws -> [String: WeatherData] {
+    private func fetchWeather(for points: [GridPoint]) async -> [String: WeatherData] {
         let batchSize = config.batchSize
         var weatherMap: [String: WeatherData] = [:]
+        var failedCount = 0
 
         for batchStart in stride(from: 0, to: points.count, by: batchSize) {
             let batchEnd = min(batchStart + batchSize, points.count)
             let batch = points[batchStart..<batchEnd]
 
-            let batchResults = try await withThrowingTaskGroup(
-                of: (String, WeatherData).self
+            let batchResults = await withTaskGroup(
+                of: (String, WeatherData?, Error?).self
             ) { group in
                 for point in batch {
                     group.addTask {
-                        let weather = try await self.weatherClient.fetch(
-                            latitude: point.latitude, longitude: point.longitude
-                        )
                         let key = "\(point.latitude),\(point.longitude)"
-                        return (key, weather)
+                        do {
+                            let weather = try await self.weatherClient.fetch(
+                                latitude: point.latitude, longitude: point.longitude
+                            )
+                            return (key, weather, nil)
+                        } catch {
+                            return (key, nil, error)
+                        }
                     }
                 }
-                var results: [(String, WeatherData)] = []
-                for try await result in group {
+                var results: [(String, WeatherData?, Error?)] = []
+                for await result in group {
                     results.append(result)
                 }
                 return results
             }
 
-            for (key, weather) in batchResults {
-                weatherMap[key] = weather
+            for (key, weather, error) in batchResults {
+                if let weather {
+                    weatherMap[key] = weather
+                } else {
+                    failedCount += 1
+                    weatherMap[key] = WeatherData(rain14d: 0, avgTemperature: 0, avgHumidity: 0)
+                    if let error {
+                        logger.warning("Weather fetch failed for point", metadata: [
+                            "key": "\(key)",
+                            "error": "\(error)"
+                        ])
+                    }
+                }
             }
+        }
+
+        if failedCount > 0 {
+            logger.warning("Weather fetch completed with failures", metadata: [
+                "failed": "\(failedCount)",
+                "total": "\(points.count)"
+            ])
         }
 
         return weatherMap
