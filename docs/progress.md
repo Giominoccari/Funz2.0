@@ -10,8 +10,8 @@ Stato avanzamento rispetto alle fasi definite in `architecture.md`.
 - [x] AuthModule completo (register, login, JWT, refresh)
 - [x] UserModule base (profilo, placeholder foto)
 - [x] Pipeline manuale con dati meteo mock e griglia ridotta (provincia test)
-- [ ] Tile statici caricati a mano su S3
-- [ ] map  che visualizza tile su MapLibre
+- [x] Tile statici caricati a mano su S3
+- [x] Pagina web MapLibre che visualizza i tile overlay su mappa base (hosted come static page o servita da Vapor)
 
 ## Beta (mese 3-4)
 

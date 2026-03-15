@@ -68,7 +68,7 @@ actor PipelineRunner {
         ])
 
         let avgScore = results.isEmpty ? 0 : results.map(\.score).reduce(0, +) / Double(results.count)
-        logger.info("Pipeline run complete", metadata: [
+        logger.info("Scoring complete", metadata: [
             "totalPoints": "\(results.count)",
             "avgScore": "\(String(format: "%.3f", avgScore))",
             "totalDuration": "\(ContinuousClock.now - runStart)"
