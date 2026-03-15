@@ -48,6 +48,8 @@ echo "=== Funghi Map — GeoData Import ==="
 echo ""
 
 mkdir -p "$DATA_DIR"
+CLMS_TASKS_DIR="${DATA_DIR}/.clms_tasks"
+mkdir -p "$CLMS_TASKS_DIR"
 
 # ─── Helpers ──────────────────────────────────────────────────────────
 
@@ -141,43 +143,203 @@ clms_authenticate() {
     return 1
 }
 
-# ─── CLMS Download Helper ────────────────────────────────────────────
+# ─── CLMS Dataset Info Discovery ─────────────────────────────────────
 #
-# Submits a download request, polls until ready, downloads the file.
-# Args: dataset_id download_info_id output_file label
+# Queries the CLMS API to discover the native format of a dataset and
+# available projections, so we can use compatible values in download requests.
 
-clms_download() {
+# Globals set by clms_discover_format:
+CLMS_OUTPUT_FORMAT=""
+CLMS_OUTPUT_GCS=""
+CLMS_DISCOVERED_DOWNLOAD_ID=""
+
+clms_discover_format() {
     local dataset_id="$1"
     local download_info_id="$2"
-    local output_file="$3"
-    local label="$4"
+    local label="$3"
 
-    if [ -z "$CLMS_TOKEN" ]; then
-        echo "  ⚠ No CLMS token — skipping $label"
-        return 1
-    fi
+    if [ -z "$CLMS_TOKEN" ]; then return 1; fi
 
     local api_base="https://land.copernicus.eu"
 
-    # BoundingBox format: [North, East, South, West]
+    # 1. Query dataset metadata to find native format
+    echo "  Discovering native format for $label..."
+    local ds_resp
+    ds_resp=$(curl -sS \
+        "${api_base}/api/@search?portal_type=DataSet&UID=${dataset_id}&metadata_fields=dataset_download_information" \
+        -H "Accept: application/json" \
+        -H "Authorization: Bearer ${CLMS_TOKEN}" 2>&1) || true
+
+    # Print all download info entries for debugging
+    echo "  ── DEBUG: All download info entries:"
+    echo "$ds_resp" | jq -r '.items[0]?.dataset_download_information.items[]? | "       [\(.["@id"])] name=\(.name) format=\(.full_format)"' 2>/dev/null || \
+    echo "$ds_resp" | jq -r '.items[0]?.dataset_download_information[]? | "       [\(.["@id"])] name=\(.name) format=\(.full_format)"' 2>/dev/null || \
+    echo "       (could not parse entries)"
+
+    # Look for a RASTER entry — prefer raster over vector for GeoTIFF output
+    local raster_id raster_format
+    raster_id=$(echo "$ds_resp" | jq -r \
+        '.items[0]?.dataset_download_information.items[]? | select(.name == "RASTER") | .["@id"]' 2>/dev/null | head -1)
+    raster_format=$(echo "$ds_resp" | jq -r \
+        '.items[0]?.dataset_download_information.items[]? | select(.name == "RASTER") | .full_format' 2>/dev/null | head -1)
+
+    # Fallback: try without .items wrapper
+    if [ -z "$raster_id" ] || [ "$raster_id" = "null" ]; then
+        raster_id=$(echo "$ds_resp" | jq -r \
+            '.items[0]?.dataset_download_information[]? | select(.name == "RASTER") | .["@id"]' 2>/dev/null | head -1)
+        raster_format=$(echo "$ds_resp" | jq -r \
+            '.items[0]?.dataset_download_information[]? | select(.name == "RASTER") | .full_format' 2>/dev/null | head -1)
+    fi
+
+    if [ -n "$raster_id" ] && [ "$raster_id" != "null" ]; then
+        echo "  Found RASTER entry: id=${raster_id}, format=${raster_format}"
+        # Override the download_info_id to use the raster version
+        CLMS_DISCOVERED_DOWNLOAD_ID="$raster_id"
+        native_format="$raster_format"
+    else
+        echo "  No RASTER entry found, using provided download info ID"
+        CLMS_DISCOVERED_DOWNLOAD_ID=""
+        # Extract format for the provided download_info_id
+        local native_format
+        native_format=$(echo "$ds_resp" | jq -r \
+            ".items[0]?.dataset_download_information.items[]? | select(.\"@id\" == \"${download_info_id}\") | .full_format // empty" 2>/dev/null | head -1)
+        if [ -z "$native_format" ] || [ "$native_format" = "null" ]; then
+            native_format=$(echo "$ds_resp" | jq -r \
+                ".items[0]?.dataset_download_information[]? | select(.\"@id\" == \"${download_info_id}\") | .full_format // empty" 2>/dev/null | head -1)
+        fi
+    fi
+
+    local native_format="${native_format:-}"
+    echo "  Native format: ${native_format:-unknown}"
+
+    # 2. Query the format conversion table to find compatible output formats
+    echo "  Querying format conversion table..."
+    local conv_resp
+    conv_resp=$(curl -sS \
+        "${api_base}/api/@format_conversion_table" \
+        -H "Accept: application/json" \
+        -H "Authorization: Bearer ${CLMS_TOKEN}" 2>&1) || true
+
+    echo "  ── DEBUG: Conversion table response (first 500 chars):"
+    echo "$conv_resp" | head -c 500 | sed 's/^/       /'
+    echo ""
+
+    # Find what output formats are compatible with the native format
+    if [ -n "$native_format" ] && [ "$native_format" != "null" ]; then
+        local compatible
+        compatible=$(echo "$conv_resp" | jq -r \
+            ".[\"${native_format}\"]? // {} | to_entries[] | select(.value == true) | .key" 2>/dev/null)
+        echo "  Compatible output formats for '${native_format}': ${compatible:-none found}"
+
+        # Prefer Geotiff, fall back to native format
+        if echo "$compatible" | grep -q "Geotiff"; then
+            CLMS_OUTPUT_FORMAT="Geotiff"
+        elif [ -n "$compatible" ]; then
+            CLMS_OUTPUT_FORMAT=$(echo "$compatible" | head -1)
+        else
+            CLMS_OUTPUT_FORMAT="$native_format"
+        fi
+    else
+        CLMS_OUTPUT_FORMAT="Geotiff"
+    fi
+
+    # 3. Query available projections
+    echo "  Querying available projections..."
+    local proj_resp
+    proj_resp=$(curl -sS \
+        "${api_base}/api/@projections?uid=${dataset_id}" \
+        -H "Accept: application/json" \
+        -H "Authorization: Bearer ${CLMS_TOKEN}" 2>&1) || true
+
+    echo "  ── DEBUG: Projections response:"
+    echo "$proj_resp" | sed 's/^/       /'
+
+    # Prefer EPSG:4326, fall back to EPSG:3035
+    if echo "$proj_resp" | jq -e '.. | select(. == "EPSG:4326")' >/dev/null 2>&1; then
+        CLMS_OUTPUT_GCS="EPSG:4326"
+    elif echo "$proj_resp" | jq -e '.. | select(. == "EPSG:3035")' >/dev/null 2>&1; then
+        CLMS_OUTPUT_GCS="EPSG:3035"
+    else
+        # Use first available
+        CLMS_OUTPUT_GCS=$(echo "$proj_resp" | jq -r '.. | strings | select(startswith("EPSG:"))' 2>/dev/null | head -1)
+        if [ -z "$CLMS_OUTPUT_GCS" ]; then
+            CLMS_OUTPUT_GCS="EPSG:4326"
+        fi
+    fi
+
+    echo "  → Will use: OutputFormat=${CLMS_OUTPUT_FORMAT}, OutputGCS=${CLMS_OUTPUT_GCS}"
+    echo ""
+}
+
+# ─── CLMS Download Helper ────────────────────────────────────────────
+#
+# Submits a download request, polls until ready, downloads the file.
+# Args: dataset_id download_info_id output_file label [bbox_override]
+# Requires: CLMS_OUTPUT_FORMAT and CLMS_OUTPUT_GCS to be set (via clms_discover_format)
+
+# Submit a CLMS download request (or resume a saved task).
+# Sets CLMS_SUBMITTED_TASK_ID and CLMS_SUBMITTED_TASK_FILE on success.
+# Args: dataset_id download_info_id label bbox_value
+clms_submit() {
+    local dataset_id="$1"
+    local download_info_id="$2"
+    local label="$3"
+    local bbox_value="$4"
+
+    # Use discovered raster download ID if available (from clms_discover_format)
+    if [ -n "${CLMS_DISCOVERED_DOWNLOAD_ID:-}" ]; then
+        download_info_id="$CLMS_DISCOVERED_DOWNLOAD_ID"
+    fi
+
+    local api_base="https://land.copernicus.eu"
+    local api_endpoint="${api_base}/api/@datarequest_post"
+    local out_format="${CLMS_OUTPUT_FORMAT:-Geotiff}"
+    local out_gcs="${CLMS_OUTPUT_GCS:-EPSG:4326}"
+
+    # Task persistence: compute a key to save/resume task IDs across runs
+    local task_key
+    task_key=$(echo "${dataset_id}:${download_info_id}:${bbox_value}" | md5sum | cut -d' ' -f1)
+    local task_file="${CLMS_TASKS_DIR}/${task_key}.taskid"
+
+    local task_id=""
+
+    # Check for a saved task from a previous run
+    if [ -f "$task_file" ]; then
+        task_id=$(cat "$task_file")
+        if [ -n "$task_id" ]; then
+            echo "  Resuming previous task $task_id for $label..."
+            CLMS_SUBMITTED_TASK_ID="$task_id"
+            CLMS_SUBMITTED_TASK_FILE="$task_file"
+            return 0
+        fi
+    fi
+
     local request_body
     request_body=$(cat <<REQEOF
 {
   "Datasets": [{
     "DatasetID": "${dataset_id}",
     "DatasetDownloadInformationID": "${download_info_id}",
-    "BoundingBox": [${BBOX_MAX_LAT}, ${BBOX_MAX_LON}, ${BBOX_MIN_LAT}, ${BBOX_MIN_LON}],
-    "OutputFormat": "Geotiff",
-    "OutputGCS": "EPSG:4326"
+    "BoundingBox": [${bbox_value}],
+    "OutputFormat": "${out_format}",
+    "OutputGCS": "${out_gcs}"
   }]
 }
 REQEOF
 )
 
     echo "  Submitting download request for $label..."
+    echo "  ── DEBUG: POST ${api_endpoint}"
+    echo "  ── DEBUG: Headers:"
+    echo "       Content-Type: application/json"
+    echo "       Authorization: Bearer ${CLMS_TOKEN:0:20}...${CLMS_TOKEN: -10}"
+    echo "  ── DEBUG: Request body:"
+    echo "$request_body" | sed 's/^/       /'
+    echo "  ──"
+
     local response http_code body
     response=$(curl -sS -w "\n%{http_code}" \
-        -X POST "${api_base}/api/@datarequest_post" \
+        -X POST "${api_endpoint}" \
         -H "Accept: application/json" \
         -H "Content-Type: application/json" \
         -H "Authorization: Bearer ${CLMS_TOKEN}" \
@@ -186,17 +348,27 @@ REQEOF
     http_code=$(echo "$response" | tail -1)
     body=$(echo "$response" | sed '$d')
 
+    echo "  ── DEBUG: Response HTTP $http_code"
+    echo "  ── DEBUG: Response body:"
+    echo "$body" | sed 's/^/       /'
+    echo "  ──"
+
+    # Handle HTTP 400 "duplicate" — no saved task to resume
+    if [ "$http_code" = "400" ] && echo "$body" | grep -qi "duplicate"; then
+        echo "  ⚠ CLMS says duplicate request for $label"
+        echo "  No saved task ID to resume — clear duplicates at https://land.copernicus.eu"
+        echo "  Or delete ${CLMS_TASKS_DIR}/ and retry after tasks expire."
+        return 1
+    fi
+
     if [ "$http_code" != "200" ] && [ "$http_code" != "201" ]; then
         echo "  ⚠ CLMS request failed for $label (HTTP $http_code)"
-        echo "  Response: $body"
         return 1
     fi
 
     # Extract TaskID
-    local task_id
     task_id=$(echo "$body" | jq -r '.TaskIds[0].TaskID // empty')
     if [ -z "$task_id" ]; then
-        # Try alternate response format
         task_id=$(echo "$body" | jq -r '.TaskID // empty')
     fi
 
@@ -206,11 +378,31 @@ REQEOF
         return 1
     fi
 
-    echo "  Task submitted: $task_id — polling for download URL..."
+    # Persist task ID for resume on re-run
+    echo "$task_id" > "$task_file"
 
-    # Poll for completion (max ~5 minutes)
+    CLMS_SUBMITTED_TASK_ID="$task_id"
+    CLMS_SUBMITTED_TASK_FILE="$task_file"
+    echo "  Task submitted: $task_id"
+    return 0
+}
+
+# Poll a CLMS task until ready, then download the file.
+# Args: task_id task_file output_file label
+clms_poll_and_download() {
+    local task_id="$1"
+    local task_file="$2"
+    local output_file="$3"
+    local label="$4"
+
+    local api_base="https://land.copernicus.eu"
+
+    echo "  Polling task $task_id for $label..."
+
+    # Poll for completion (max ~180 minutes)
+    local poll_max=1080
     local download_url=""
-    for i in $(seq 1 30); do
+    for i in $(seq 1 $poll_max); do
         sleep 10
         local status_resp
         status_resp=$(curl -sS \
@@ -231,17 +423,19 @@ REQEOF
         local status
         status=$(echo "$status_resp" | jq -r '.. | .Status? // empty' 2>/dev/null | head -1)
         if [ "$status" = "Failed" ] || [ "$status" = "Rejected" ]; then
+            echo ""
             echo "  ⚠ CLMS task failed for $label: $status_resp"
+            rm -f "$task_file"
             return 1
         fi
 
-        printf "  Poll %d/30 (status: %s)...\r" "$i" "${status:-pending}"
+        printf "  [%s] Poll %d/%d (status: %s)...\r" "$label" "$i" "$poll_max" "${status:-pending}"
     done
     echo "" # clear progress line
 
     if [ -z "$download_url" ]; then
         echo "  ⚠ Timed out waiting for $label download (task: $task_id)"
-        echo "  Check status at: https://land.copernicus.eu"
+        echo "  Task saved — re-run to resume polling."
         return 1
     fi
 
@@ -252,6 +446,7 @@ REQEOF
         file_size=$(wc -c < "$output_file" | tr -d ' ')
         if [ "$file_size" -gt 100000 ]; then
             echo "  ✔ $label downloaded (${file_size} bytes)"
+            rm -f "$task_file"
             return 0
         else
             echo "  ⚠ $label file too small (${file_size} bytes)"
@@ -260,6 +455,255 @@ REQEOF
         fi
     else
         echo "  ⚠ Download failed for $label"
+        rm -f "$output_file"
+        return 1
+    fi
+}
+
+# Legacy wrapper: submit + poll + download in one call (used for non-chunked downloads)
+# Args: dataset_id download_info_id output_file label [bbox_override]
+clms_download() {
+    local dataset_id="$1"
+    local download_info_id="$2"
+    local output_file="$3"
+    local label="$4"
+    local bbox_override="${5:-}"
+
+    if [ -z "$CLMS_TOKEN" ]; then
+        echo "  ⚠ No CLMS token — skipping $label"
+        return 1
+    fi
+
+    local bbox_value
+    if [ -n "$bbox_override" ]; then
+        bbox_value="$bbox_override"
+    else
+        bbox_value="${BBOX_MAX_LAT}, ${BBOX_MAX_LON}, ${BBOX_MIN_LAT}, ${BBOX_MIN_LON}"
+    fi
+
+    if ! clms_submit "$dataset_id" "$download_info_id" "$label" "$bbox_value"; then
+        return 1
+    fi
+
+    clms_poll_and_download "$CLMS_SUBMITTED_TASK_ID" "$CLMS_SUBMITTED_TASK_FILE" "$output_file" "$label"
+}
+
+# ─── CLMS Chunked Download ───────────────────────────────────────────
+#
+# Splits Italy bbox into 4 quadrants to stay under the CLMS 1.6T limit,
+# downloads each chunk, then merges with gdal_merge.py.
+# Args: dataset_id download_info_id output_file label
+
+clms_download_chunked() {
+    local dataset_id="$1"
+    local download_info_id="$2"
+    local output_file="$3"
+    local label="$4"
+
+    if [ -z "$CLMS_TOKEN" ]; then
+        echo "  ⚠ No CLMS token — skipping $label"
+        return 1
+    fi
+
+    # Discover valid format and projection for this dataset
+    clms_discover_format "$dataset_id" "$download_info_id" "$label"
+
+    local mid_lon mid_lat
+    mid_lon=$(echo "scale=1; ($BBOX_MIN_LON + $BBOX_MAX_LON) / 2" | bc)
+    mid_lat=$(echo "scale=1; ($BBOX_MIN_LAT + $BBOX_MAX_LAT) / 2" | bc)
+
+    echo "  Splitting bbox into 4 quadrants (mid: ${mid_lon}, ${mid_lat})..."
+    echo "    Q1: SW [${BBOX_MIN_LAT}-${mid_lat}, ${BBOX_MIN_LON}-${mid_lon}]"
+    echo "    Q2: SE [${BBOX_MIN_LAT}-${mid_lat}, ${mid_lon}-${BBOX_MAX_LON}]"
+    echo "    Q3: NW [${mid_lat}-${BBOX_MAX_LAT}, ${BBOX_MIN_LON}-${mid_lon}]"
+    echo "    Q4: NE [${mid_lat}-${BBOX_MAX_LAT}, ${mid_lon}-${BBOX_MAX_LON}]"
+
+    local chunks_dir="${DATA_DIR}/clms_chunks_$$"
+    mkdir -p "$chunks_dir"
+
+    # bbox format: "north, east, south, west"
+    local -a quadrants=(
+        "${mid_lat}, ${mid_lon}, ${BBOX_MIN_LAT}, ${BBOX_MIN_LON}"   # SW
+        "${mid_lat}, ${BBOX_MAX_LON}, ${BBOX_MIN_LAT}, ${mid_lon}"   # SE
+        "${BBOX_MAX_LAT}, ${mid_lon}, ${mid_lat}, ${BBOX_MIN_LON}"   # NW
+        "${BBOX_MAX_LAT}, ${BBOX_MAX_LON}, ${mid_lat}, ${mid_lon}"   # NE
+    )
+    local -a quad_names=("SW" "SE" "NW" "NE")
+
+    # ── Phase 1: Submit all 4 chunks ──
+    echo ""
+    echo "  ── Phase 1: Submitting all 4 chunks ──"
+
+    local -a task_ids=()
+    local -a task_files=()
+    local -a chunk_file_paths=()
+    local submit_ok=0
+
+    for qi in 0 1 2 3; do
+        local qname="${quad_names[$qi]}"
+        local chunk_file="${chunks_dir}/chunk_${qname}.tif"
+        chunk_file_paths+=("$chunk_file")
+
+        echo ""
+        echo "  ── Submit ${qname} ($(( qi + 1 ))/4) ──"
+
+        # Delay between requests to avoid HTTP 429 rate limiting
+        if [ "$qi" -gt 0 ]; then
+            echo "  (waiting 15s to avoid rate limiting...)"
+            sleep 15
+        fi
+
+        if clms_submit "$dataset_id" "$download_info_id" "${label} (${qname})" "${quadrants[$qi]}"; then
+            task_ids+=("$CLMS_SUBMITTED_TASK_ID")
+            task_files+=("$CLMS_SUBMITTED_TASK_FILE")
+            submit_ok=$((submit_ok + 1))
+        else
+            task_ids+=("")
+            task_files+=("")
+            echo "  ⚠ Submit failed for chunk ${qname}"
+        fi
+    done
+
+    echo ""
+    echo "  Submitted ${submit_ok}/4 chunks"
+
+    if [ "$submit_ok" -eq 0 ]; then
+        rm -rf "$chunks_dir"
+        echo "  ✗ All submissions failed for $label"
+        return 1
+    fi
+
+    # ── Phase 2: Poll all tasks in parallel, then download ──
+    echo ""
+    echo "  ── Phase 2: Polling all tasks in parallel (~180 min max) ──"
+
+    local poll_max=1080   # 1080 × 10s = ~180 minutes
+    local api_base="https://land.copernicus.eu"
+    local -a download_urls=("" "" "" "")
+    local -a chunk_status=("pending" "pending" "pending" "pending")
+    local completed=0
+
+    # Mark already-failed submissions as done
+    for qi in 0 1 2 3; do
+        if [ -z "${task_ids[$qi]}" ]; then
+            chunk_status[$qi]="failed"
+            completed=$((completed + 1))
+        fi
+    done
+
+    for poll_i in $(seq 1 $poll_max); do
+        if [ "$completed" -ge 4 ]; then
+            break
+        fi
+
+        sleep 10
+
+        for qi in 0 1 2 3; do
+            # Skip already completed/failed chunks
+            if [ "${chunk_status[$qi]}" != "pending" ]; then
+                continue
+            fi
+
+            local tid="${task_ids[$qi]}"
+            local status_resp
+            status_resp=$(curl -sS \
+                "${api_base}/api/@datarequest_search?TaskID=${tid}" \
+                -H "Accept: application/json" \
+                -H "Authorization: Bearer ${CLMS_TOKEN}" 2>&1) || true
+
+            # Check for download URL
+            local dl_url
+            dl_url=$(echo "$status_resp" | jq -r '
+                .. | .DownloadURL? // empty | select(. != "" and . != "null")
+            ' 2>/dev/null | head -1)
+
+            if [ -n "$dl_url" ]; then
+                download_urls[$qi]="$dl_url"
+                chunk_status[$qi]="ready"
+                completed=$((completed + 1))
+                echo "  ✔ ${quad_names[$qi]} ready for download (poll $poll_i)"
+                continue
+            fi
+
+            # Check for failure
+            local status
+            status=$(echo "$status_resp" | jq -r '.. | .Status? // empty' 2>/dev/null | head -1)
+            if [ "$status" = "Failed" ] || [ "$status" = "Rejected" ]; then
+                chunk_status[$qi]="failed"
+                completed=$((completed + 1))
+                rm -f "${task_files[$qi]}"
+                echo "  ⚠ ${quad_names[$qi]} task failed ($status)"
+                continue
+            fi
+        done
+
+        # Show combined progress
+        local progress=""
+        for qi in 0 1 2 3; do
+            progress+="${quad_names[$qi]}:${chunk_status[$qi]} "
+        done
+        printf "  Poll %d/%d [%s]\r" "$poll_i" "$poll_max" "$progress"
+    done
+    echo "" # clear progress line
+
+    # ── Phase 3: Download ready chunks ──
+    echo ""
+    echo "  ── Phase 3: Downloading ready chunks ──"
+
+    local chunk_files=()
+    local chunk_ok=0
+
+    for qi in 0 1 2 3; do
+        local qname="${quad_names[$qi]}"
+        local chunk_file="${chunk_file_paths[$qi]}"
+
+        if [ "${chunk_status[$qi]}" = "ready" ]; then
+            echo "  Downloading ${qname}..."
+            if curl -sS -f -L -o "$chunk_file" "${download_urls[$qi]}" \
+                -H "Authorization: Bearer ${CLMS_TOKEN}" 2>&1; then
+                local file_size
+                file_size=$(wc -c < "$chunk_file" | tr -d ' ')
+                if [ "$file_size" -gt 100000 ]; then
+                    echo "  ✔ ${qname} downloaded (${file_size} bytes)"
+                    chunk_files+=("$chunk_file")
+                    chunk_ok=$((chunk_ok + 1))
+                    rm -f "${task_files[$qi]}"
+                else
+                    echo "  ⚠ ${qname} file too small (${file_size} bytes)"
+                    rm -f "$chunk_file"
+                fi
+            else
+                echo "  ⚠ ${qname} download failed"
+                rm -f "$chunk_file"
+            fi
+        elif [ "${chunk_status[$qi]}" = "pending" ]; then
+            echo "  ⚠ ${qname} timed out (task: ${task_ids[$qi]}) — saved for resume"
+        else
+            echo "  ⚠ ${qname} failed"
+        fi
+    done
+
+    echo ""
+    echo "  Downloaded ${chunk_ok}/4 chunks"
+
+    if [ "$chunk_ok" -eq 0 ]; then
+        rm -rf "$chunks_dir"
+        echo "  ✗ All chunks failed for $label"
+        return 1
+    fi
+
+    # Merge chunks
+    echo "  Merging ${chunk_ok} chunks into ${output_file}..."
+    gdal_merge.py -o "$output_file" "${chunk_files[@]}" -q
+    rm -rf "$chunks_dir"
+
+    local file_size
+    file_size=$(wc -c < "$output_file" | tr -d ' ')
+    if [ "$file_size" -gt 100000 ]; then
+        echo "  ✔ $label merged (${file_size} bytes)"
+        return 0
+    else
+        echo "  ⚠ Merged file too small (${file_size} bytes)"
         rm -f "$output_file"
         return 1
     fi
@@ -294,7 +738,7 @@ CLC_DOWNLOAD_ID="1bda2fbd-3230-42ba-98cf-69c96ac063bc"
 if [ ! -f "$CORINE_RAW" ]; then
     echo "▶ Downloading CORINE Land Cover (CLC 2018)..."
 
-    if ! clms_download "$CLC_DATASET_ID" "$CLC_DOWNLOAD_ID" "$CORINE_RAW" "CORINE CLC 2018"; then
+    if ! clms_download_chunked "$CLC_DATASET_ID" "$CLC_DOWNLOAD_ID" "$CORINE_RAW" "CORINE CLC 2018"; then
         echo ""
         echo "  ✗ CORINE download failed."
         echo ""
@@ -369,7 +813,7 @@ if [ ! -f "$TCD_FILE" ]; then
     fi
 
     if [ -n "$TCD_DOWNLOAD_ID" ] && [ -n "$TCD_DATASET_ID" ]; then
-        if ! clms_download "$TCD_DATASET_ID" "$TCD_DOWNLOAD_ID" "$TCD_FILE" "Tree Cover Density 2018"; then
+        if ! clms_download_chunked "$TCD_DATASET_ID" "$TCD_DOWNLOAD_ID" "$TCD_FILE" "Tree Cover Density 2018"; then
             echo "  ⚠ Tree Cover Density download failed — skipping (non-critical)"
         fi
     else
@@ -435,7 +879,7 @@ if [ ! -f "$DLT_FILE" ]; then
     fi
 
     if [ -n "$DLT_DOWNLOAD_ID" ] && [ -n "$DLT_DATASET_ID" ]; then
-        if ! clms_download "$DLT_DATASET_ID" "$DLT_DOWNLOAD_ID" "$DLT_FILE" "Dominant Leaf Type 2018"; then
+        if ! clms_download_chunked "$DLT_DATASET_ID" "$DLT_DOWNLOAD_ID" "$DLT_FILE" "Dominant Leaf Type 2018"; then
             echo "  ⚠ Dominant Leaf Type download failed — skipping (non-critical)"
         fi
     else

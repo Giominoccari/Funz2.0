@@ -66,6 +66,7 @@ fastlane/test_output
 
 # Funz2.0
 Keys/*
+data/geodata/.clms_tasks/
 .env
 config/secrets.yaml
 secrets/
