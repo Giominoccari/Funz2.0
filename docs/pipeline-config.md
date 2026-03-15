@@ -22,9 +22,9 @@ Tutte le credenziali sono in env vars, mai in file versionati. In sviluppo local
 |-----------|:---:|-------------|-------------|
 | `DATABASE_URL` | Si | Connection string PostgreSQL con PostGIS | `postgres://funghimap:funghimap_dev@localhost:5432/funghimap_dev` |
 | `REDIS_URL` | Si | Connection string Redis | `redis://localhost:6379` |
-| `JWT_PRIVATE_KEY` | Si | Chiave privata RSA PEM per JWT (con `\n` escaped) | Vedi `.env` |
+| `JWT_PRIVATE_KEY_FILE` | Si | Path al file PEM della chiave privata RSA per JWT | `./Keys/jwt_private.pem` |
 | `ADMIN_API_KEY` | Si (per trigger pipeline) | Token Bearer per endpoint admin | Qualsiasi stringa sicura, es. `my-secret-admin-key` |
-| `CDSE_TOKEN` | No | Non piu necessario: geodata scaricati da fonti pubbliche senza auth | — |
+| `CLMS_SERVICE_KEY_FILE` | Si (per geodata import) | Path al file JSON service key CLMS (per CORINE, Tree Cover, Leaf Type) | `secrets/clms-key.json` |
 | `AWS_ACCESS_KEY_ID` | No (solo deploy) | Credenziali AWS per S3 upload | — |
 | `AWS_SECRET_ACCESS_KEY` | No (solo deploy) | Credenziali AWS per S3 upload | — |
 
@@ -92,10 +92,12 @@ Nessuna configurazione in `app.yaml` — i dati geografici (altitudine, aspetto,
 
 | Tabella | Sorgente | Dati |
 |---------|----------|------|
-| `copernicus_dem` | Copernicus DEM GLO-25 | Elevazione (metri) |
+| `copernicus_dem` | Copernicus DEM GLO-25 (AWS S3) | Elevazione (metri) |
 | `dem_aspect` | Derivato da DEM con `gdaldem aspect` | Esposizione (gradi 0-360) |
-| `corine_landcover` | CORINE CLC 2018 | Copertura forestale |
-| `esdac_soil` | ISRIC SoilGrids WRB (o ESDAC manuale) | Tipo di suolo |
+| `corine_landcover` | CORINE CLC 2018 (CLMS API) | Copertura forestale (codici CLC) |
+| `esdac_soil` | ISRIC SoilGrids WRB | Tipo di suolo |
+| `tree_cover_density` | HRL Tree Cover Density 2018 (CLMS API) | Densita copertura arborea (0-100%) |
+| `dominant_leaf_type` | HRL Dominant Leaf Type 2018 (CLMS API) | Tipo foglia dominante (0=non-albero, 1=latifoglie, 2=conifere) |
 
 Query sub-millisecondo via `ST_Value()`, nessuna dipendenza internet, nessuna cache Redis necessaria.
 
@@ -114,28 +116,47 @@ Rilevante solo con S3 uploader reale (non il mock). Richiede credenziali AWS.
 
 ## Setup dati geografici (one-time)
 
-I dati raster (foresta, suolo, altitudine, aspetto) devono essere importati in PostGIS una volta sola. Lo script `import-geodata.sh` scarica tutto automaticamente da fonti open-data pubbliche (nessuna autenticazione richiesta).
+I dati raster (foresta, suolo, altitudine, aspetto) devono essere importati in PostGIS una volta sola.
 
 In assenza di raster, la pipeline usa valori di default (`.none` per foresta, `.other` per suolo, `0` per altitudine/aspetto).
 
 **Nota**: all'avvio l'app verifica che la tabella `copernicus_dem` esista e contenga dati. Se mancante, logga un warning.
 
-### Download automatico
+### Prerequisito: CLMS Service Key
 
-Lo script scarica automaticamente da queste fonti (nessun token/credenziale necessario):
+CORINE, Tree Cover Density e Dominant Leaf Type richiedono autenticazione CLMS:
+
+1. Creare account EU Login gratuito su https://land.copernicus.eu
+2. Profile → API Tokens → Create → scaricare il file JSON service key
+3. Aggiungere a `.env`: `CLMS_SERVICE_KEY_FILE=path/to/key.json`
+4. **Non versionare il file key** — aggiungerlo a `.gitignore`
+
+Docs: https://eea.github.io/clms-api-docs/authentication.html
+
+### Fonti dati
 
 1. **CORINE Land Cover CLC 2018** (copertura forestale):
-   - Fonte: EEA ArcGIS WCS (public, no auth)
-   - Risoluzione: ~500m (sufficiente per la griglia pipeline)
+   - Fonte: CLMS Download API (richiede `CLMS_SERVICE_KEY_FILE`)
+   - Risoluzione: 100m, codici classificazione CLC (311=latifoglie, 312=conifere, 313=misto)
    - Fallback: download manuale da https://land.copernicus.eu/en/products/corine-land-cover/clc2018
 
-2. **Classificazione suolo** (tipo di suolo):
+2. **Tree Cover Density HRL 2018** (densita copertura arborea):
+   - Fonte: CLMS Download API (richiede `CLMS_SERVICE_KEY_FILE`)
+   - Risoluzione: 10m, valori 0-100 (percentuale copertura)
+   - Opzionale: complemento a CORINE per scoring piu preciso
+
+3. **Dominant Leaf Type HRL 2018** (tipo foglia dominante):
+   - Fonte: CLMS Download API (richiede `CLMS_SERVICE_KEY_FILE`)
+   - Risoluzione: 10m, classificazione 0=non-albero, 1=latifoglie, 2=conifere
+   - Opzionale: complemento a CORINE a risoluzione maggiore
+
+4. **Classificazione suolo** (tipo di suolo):
    - Fonte: ISRIC SoilGrids WRB (open access, no auth)
    - Risoluzione: 250m, copertura globale
    - Codici WRB mappati a calcareous/siliceous/mixed in `PostGISForestClient.swift`
    - Alternativa manuale: ESDAC (richiede registrazione JRC gratuita)
 
-3. **Copernicus DEM GLO-25** (altitudine 25m + aspetto derivato):
+5. **Copernicus DEM GLO-25** (altitudine 25m + aspetto derivato):
    - Fonte: AWS Open Data `s3://copernicus-dem-25m/` (public, no auth)
    - Risoluzione: 25m, ~144 tile da 1° per l'Italia
    - Genera automaticamente il raster aspetto via `gdaldem aspect`
@@ -161,7 +182,7 @@ Lo script verifica la presenza dei file in `data/geodata/`, riprojetta a EPSG:43
 make geodata-check
 ```
 
-Deve mostrare il conteggio tile per tutte le tabelle raster: `corine_landcover`, `esdac_soil`, `copernicus_dem`, `dem_aspect`.
+Deve mostrare il conteggio tile per tutte le tabelle raster: `corine_landcover`, `esdac_soil`, `copernicus_dem`, `dem_aspect`. Le tabelle opzionali `tree_cover_density` e `dominant_leaf_type` vengono mostrate se presenti.
 
 ---
 

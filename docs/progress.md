@@ -55,7 +55,7 @@ Il target SPM `App` ha `path: "Sources"` — compila tutto sotto `Sources/`. La 
 
 Implementato il modulo di autenticazione completo:
 - **Endpoints**: `POST /auth/register`, `/auth/login`, `/auth/refresh`, `/auth/apple` (stub 501)
-- **JWT RS256**: payload con claims sub/iss/iat/exp/email, lifetime 15 min. Chiave RSA da env var `JWT_PRIVATE_KEY`
+- **JWT RS256**: payload con claims sub/iss/iat/exp/email, lifetime 15 min. Chiave RSA da file PEM via env var `JWT_PRIVATE_KEY_FILE`
 - **Refresh token**: opaco (32 byte random, base64url), SHA-256 hash salvato in DB, rotazione ad ogni uso, lifetime 30 giorni
 - **Modelli Fluent**: `User` (email, password_hash bcrypt, apple_user_id) + `RefreshToken` (token_hash, expires_at, revoked_at)
 - **Middleware JWT**: `JWTAuthMiddleware` pronto per proteggere route future (User, Map, etc.)

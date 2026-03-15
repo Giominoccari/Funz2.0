@@ -25,15 +25,21 @@ func configure(_ app: Application) async throws {
     app.redis.configuration = try RedisConfiguration(url: redisURL)
     logger.info("Redis configured")
 
-    // JWT RS256
-    guard let jwtPrivateKeyPEM = Environment.get("JWT_PRIVATE_KEY") else {
-        logger.critical("JWT_PRIVATE_KEY environment variable is not set")
-        fatalError("Missing required environment variable: JWT_PRIVATE_KEY")
+    // JWT RS256 — read private key from PEM file
+    guard let jwtKeyPath = Environment.get("JWT_PRIVATE_KEY_FILE") else {
+        logger.critical("JWT_PRIVATE_KEY_FILE environment variable is not set")
+        fatalError("Missing required environment variable: JWT_PRIVATE_KEY_FILE")
     }
-    let pemString = jwtPrivateKeyPEM.replacingOccurrences(of: "\\n", with: "\n")
+    let pemString: String
+    do {
+        pemString = try String(contentsOfFile: jwtKeyPath, encoding: .utf8)
+    } catch {
+        logger.critical("Failed to read JWT private key file", metadata: ["path": "\(jwtKeyPath)", "error": "\(error)"])
+        fatalError("Cannot read JWT private key file at: \(jwtKeyPath)")
+    }
     let rsaKey = try Insecure.RSA.PrivateKey(pem: pemString)
     app.jwtKeys = await JWTKeyCollection().add(rsa: rsaKey, digestAlgorithm: .sha256)
-    logger.info("JWT RS256 configured")
+    logger.info("JWT RS256 configured", metadata: ["keyFile": "\(jwtKeyPath)"])
 
     // Static files (Public/)
     app.middleware.use(FileMiddleware(publicDirectory: app.directory.publicDirectory))
