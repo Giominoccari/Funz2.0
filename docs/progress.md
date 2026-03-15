@@ -15,7 +15,7 @@ Stato avanzamento rispetto alle fasi definite in `architecture.md`.
 
 ## Beta (mese 3-4)
 
-- [ ] Pipeline automatizzata con Open-Meteo reale
+- [x] Pipeline automatizzata con Open-Meteo reale + GeoDataLoader reale
 - [ ] ScoringEngine v1 con pesi fissi da config YAML
 - [ ] SubscriptionModule + Stripe (free vs pro)
 - [ ] Deploy ECS Fargate (api + worker)
