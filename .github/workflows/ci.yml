@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  push:
+    branches: [main, Pipeline]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    container:
+      image: swift:6.0-jammy
+
+    services:
+      postgres:
+        image: postgis/postgis:16-3.5
+        env:
+          POSTGRES_USER: funghimap
+          POSTGRES_PASSWORD: funghimap_dev
+          POSTGRES_DB: funghimap_test
+        options: >-
+          --health-cmd "pg_isready -U funghimap -d funghimap_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+      redis:
+        image: redis:7-alpine
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: "postgresql://funghimap:funghimap_dev@postgres:5432/funghimap_test"
+      REDIS_URL: "redis://redis:6379"
+      JWT_PRIVATE_KEY_FILE: ""
+      LOG_LEVEL: warning
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup PostgreSQL extensions
+        run: |
+          apt-get update && apt-get install -y postgresql-client
+          PGPASSWORD=funghimap_dev psql -h postgres -U funghimap -d funghimap_test -c "CREATE EXTENSION IF NOT EXISTS postgis;"
+          PGPASSWORD=funghimap_dev psql -h postgres -U funghimap -d funghimap_test -c "CREATE EXTENSION IF NOT EXISTS postgis_raster;"
+          PGPASSWORD=funghimap_dev psql -h postgres -U funghimap -d funghimap_test -c 'CREATE EXTENSION IF NOT EXISTS "uuid-ossp";'
+
+      - name: Resolve dependencies
+        run: swift package resolve
+
+      - name: Build
+        run: swift build
+
+      - name: Run tests
+        run: swift test --parallel
+
+      - name: Run tests with coverage
+        run: swift test --enable-code-coverage
+
+      - name: Export coverage report
+        run: |
+          BIN=$(swift build --show-bin-path)
+          COV_FILE=$(find .build -name 'default.profdata' -type f | head -1)
+          if [ -n "$COV_FILE" ]; then
+            llvm-cov export \
+              "$BIN/Funz2.0PackageTests.xctest" \
+              -instr-profile "$COV_FILE" \
+              -format lcov \
+              -ignore-filename-regex '.build|Tests' \
+              > coverage.lcov
+          fi
+
+      - name: Upload coverage to Codecov
+        if: always()
+        uses: codecov/codecov-action@v4
+        with:
+          files: coverage.lcov
+          fail_ci_if_error: false
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}

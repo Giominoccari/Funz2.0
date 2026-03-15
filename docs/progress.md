@@ -19,7 +19,7 @@ Stato avanzamento rispetto alle fasi definite in `architecture.md`.
 - [x] ScoringEngine v1 con pesi fissi da config YAML
 - [x] SubscriptionModule + Stripe (free vs pro)
 - [x] Deploy ECS Fargate (api + worker)
-- [ ] CI/CD GitHub Actions
+- [x] CI/CD GitHub Actions
 
 ## v1.0 (mese 5-6)
 
@@ -251,3 +251,16 @@ Infrastruttura completa per deploy su AWS ECS Fargate con due container (api alw
 - Opzioni: `--api-only`, `--worker-only`
 
 **Makefile**: aggiunti `make docker-build`, `make deploy`, `make deploy-api`, `make deploy-worker`, `make cfn-deploy`
+
+### CI/CD GitHub Actions (2026-03-15)
+
+Configurata pipeline CI con GitHub Actions, ultimo task della fase Beta:
+
+**Workflow** (`.github/workflows/ci.yml`):
+- **Trigger**: push su `main`/`Pipeline` + pull request su `main`
+- **Runner**: `ubuntu-latest` con container `swift:6.0-jammy` (Swift 6, coerente con Dockerfile deploy)
+- **Services**: PostgreSQL 16 + PostGIS 3.5 (`postgis/postgis:16-3.5`) e Redis 7 Alpine — health check integrati
+- **Setup DB**: installa `postgresql-client`, abilita extensions `postgis`, `postgis_raster`, `uuid-ossp` sul DB di test
+- **Steps**: `swift package resolve` → `swift build` → `swift test --parallel` → `swift test --enable-code-coverage`
+- **Coverage**: export LCOV con `llvm-cov`, upload su Codecov (free tier) via `codecov/codecov-action@v4`. Richiede secret `CODECOV_TOKEN` nel repo GitHub
+- **Env vars CI**: `DATABASE_URL` e `REDIS_URL` puntano ai container service. `JWT_PRIVATE_KEY_FILE` vuoto (test che non necessitano di JWT reale). `LOG_LEVEL=warning` per output pulito
