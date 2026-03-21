@@ -62,8 +62,18 @@ logs: ## Tail Docker service logs
 	docker compose logs -f
 
 # ─── GeoData ─────────────────────────────────────────────────────────
-geodata-import: ## Download and import geodata into PostGIS (auto-downloads from public sources)
-	@$(LOAD_ENV) && bash scripts/import-geodata.sh
+GEODATA_VENV = .venv/geodata
+GEODATA_PYTHON = $(GEODATA_VENV)/bin/python3
+
+$(GEODATA_VENV)/bin/hda: ## (internal) Create venv with hda installed
+	@echo "▶ Creating Python venv for WEkEO downloads..."
+	python3 -m venv $(GEODATA_VENV)
+	$(GEODATA_VENV)/bin/pip install --quiet --upgrade pip
+	$(GEODATA_VENV)/bin/pip install --quiet hda
+	@echo "  ✔ venv ready at $(GEODATA_VENV) with hda installed"
+
+geodata-import: $(GEODATA_VENV)/bin/hda ## Download and import geodata into PostGIS (WEkEO + ISRIC)
+	@$(LOAD_ENV) && $(GEODATA_PYTHON) scripts/import-geodata.py
 
 geodata-check: ## Verify raster tables exist in PostGIS
 	@$(LOAD_ENV) && psql "$$DATABASE_URL" \

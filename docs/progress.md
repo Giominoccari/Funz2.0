@@ -252,6 +252,20 @@ Infrastruttura completa per deploy su AWS ECS Fargate con due container (api alw
 
 **Makefile**: aggiunti `make docker-build`, `make deploy`, `make deploy-api`, `make deploy-worker`, `make cfn-deploy`
 
+### GeoData import consolidato in singolo script Python (2026-03-16)
+
+Consolidati `scripts/download-geodata.py` + `scripts/import-geodata.sh` in un unico `scripts/import-geodata.py` — download WEkEO HDA + reproject + clip Italia + import PostGIS:
+
+- **`scripts/import-geodata.py`**: script Python unico che sostituisce entrambi i vecchi script. Usa WEkEO HDA (`hda`) per download CORINE/TCD/DLT/DEM, ISRIC SoilGrids per suolo, GDAL CLI per reproject/clip, `raster2pgsql | psql` per import PostGIS
+- **Timeout su WEkEO**: `client.search()` e `download()` wrappati con `ThreadPoolExecutor` + timeout (120s search, 30min download) per prevenire hang infiniti
+- **DEM con bbox Italia**: query WEkEO con `bbox: [6.5, 36.5, 18.5, 47.5]` per scaricare solo tile che coprono l'Italia. Supporta anche tile WEkEO gia scaricati (ZIP in `data/geodata/dem_tiles/`)
+- **Soil da ISRIC SoilGrids**: cascade VRT → WCS → COG (invariato, non su WEkEO)
+- **Tutti i raster clippati a bbox Italia** e riproiettati a EPSG:4326
+- **Aspect derivato**: `gdaldem aspect` dal DEM, gestito come dataset a se stante
+- **Import PostGIS**: `raster2pgsql | psql` con tile 100x100, indice spaziale, verifica finale
+- **Idempotente**: skip se file finali gia esistono, supporto dataset selettivi via CLI
+- **Rimosso bash**: eliminato `import-geodata.sh` (~320 righe bash) — tutta la logica ora in Python
+
 ### CI/CD GitHub Actions (2026-03-15)
 
 Configurata pipeline CI con GitHub Actions, ultimo task della fase Beta:

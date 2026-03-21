@@ -10,7 +10,8 @@ Guida per configurare e avviare la pipeline di calcolo mappe probabilita funghi.
 |----------|---------------|------|
 | PostgreSQL 16 + PostGIS | `make services-up` | Docker Compose, porta 5432 |
 | Redis 7 | `make services-up` | Docker Compose, porta 6379 |
-| GDAL (`gdalwarp`, `raster2pgsql`) | `brew install gdal` / `apt install gdal-bin` | Solo per import dati geo raster |
+| GDAL (`gdalwarp`, `gdal_translate`, `gdaldem`, `raster2pgsql`) | `brew install gdal postgis` | Per import dati geo raster |
+| Python 3 + hda | `pip install hda` | Per download dati da WEkEO |
 
 ---
 
@@ -24,7 +25,8 @@ Tutte le credenziali sono in env vars, mai in file versionati. In sviluppo local
 | `REDIS_URL` | Si | Connection string Redis | `redis://localhost:6379` |
 | `JWT_PRIVATE_KEY_FILE` | Si | Path al file PEM della chiave privata RSA per JWT | `./Keys/jwt_private.pem` |
 | `ADMIN_API_KEY` | Si (per trigger pipeline) | Token Bearer per endpoint admin | Qualsiasi stringa sicura, es. `my-secret-admin-key` |
-| `CLMS_SERVICE_KEY_FILE` | Si (per geodata import) | Path al file JSON service key CLMS (per CORINE, Tree Cover, Leaf Type) | `secrets/clms-key.json` |
+| `WEKEO_USERNAME` | Si (per geodata import) | Email/username account WEkEO | `your-email@example.com` |
+| `WEKEO_PASSWORD` | Si (per geodata import) | Password account WEkEO | — |
 | `AWS_ACCESS_KEY_ID` | No (solo deploy) | Credenziali AWS per S3 upload | — |
 | `AWS_SECRET_ACCESS_KEY` | No (solo deploy) | Credenziali AWS per S3 upload | — |
 
@@ -92,12 +94,12 @@ Nessuna configurazione in `app.yaml` — i dati geografici (altitudine, aspetto,
 
 | Tabella | Sorgente | Dati |
 |---------|----------|------|
-| `copernicus_dem` | Copernicus DEM GLO-25 (AWS S3) | Elevazione (metri) |
+| `copernicus_dem` | Copernicus DEM GLO-30 (AWS Open Data) | Elevazione (metri) |
 | `dem_aspect` | Derivato da DEM con `gdaldem aspect` | Esposizione (gradi 0-360) |
-| `corine_landcover` | CORINE CLC 2018 (CLMS API) | Copertura forestale (codici CLC) |
+| `corine_landcover` | CORINE CLC 2018 (Copernicus Land) | Copertura forestale (codici CLC) |
 | `esdac_soil` | ISRIC SoilGrids WRB | Tipo di suolo |
-| `tree_cover_density` | HRL Tree Cover Density 2018 (CLMS API) | Densita copertura arborea (0-100%) |
-| `dominant_leaf_type` | HRL Dominant Leaf Type 2018 (CLMS API) | Tipo foglia dominante (0=non-albero, 1=latifoglie, 2=conifere) |
+| `tree_cover_density` | HRL Tree Cover Density 2018 (opzionale) | Densita copertura arborea (0-100%) |
+| `dominant_leaf_type` | HRL Dominant Leaf Type 2018 (opzionale) | Tipo foglia dominante (0=non-albero, 1=latifoglie, 2=conifere) |
 
 Query sub-millisecondo via `ST_Value()`, nessuna dipendenza internet, nessuna cache Redis necessaria.
 
@@ -122,45 +124,47 @@ In assenza di raster, la pipeline usa valori di default (`.none` per foresta, `.
 
 **Nota**: all'avvio l'app verifica che la tabella `copernicus_dem` esista e contenga dati. Se mancante, logga un warning.
 
-### Prerequisito: CLMS Service Key
+### Fonti dati e download
 
-CORINE, Tree Cover Density e Dominant Leaf Type richiedono autenticazione CLMS:
+Lo script `scripts/import-geodata.py` gestisce download (via WEkEO HDA), reprojection a EPSG:4326, clip all'estensione Italia, e import in PostGIS.
 
-1. Creare account EU Login gratuito su https://land.copernicus.eu
-2. Profile → API Tokens → Create → scaricare il file JSON service key
-3. Aggiungere a `.env`: `CLMS_SERVICE_KEY_FILE=path/to/key.json`
-4. **Non versionare il file key** — aggiungerlo a `.gitignore`
+### Prerequisito: Account WEkEO
 
-Docs: https://eea.github.io/clms-api-docs/authentication.html
+CORINE, Tree Cover Density, Dominant Leaf Type e Copernicus DEM vengono scaricati da WEkEO tramite la libreria Python HDA:
+
+1. Creare account gratuito su https://www.wekeo.eu
+2. Installare la libreria: `pip install hda`
+3. Aggiungere a `.env`:
+   ```
+   WEKEO_USERNAME=your-email@example.com
+   WEKEO_PASSWORD=your-password
+   ```
 
 ### Fonti dati
 
 1. **CORINE Land Cover CLC 2018** (copertura forestale):
-   - Fonte: CLMS Download API (richiede `CLMS_SERVICE_KEY_FILE`)
+   - Fonte: WEkEO (`EO:EEA:DAT:CORINE`)
    - Risoluzione: 100m, codici classificazione CLC (311=latifoglie, 312=conifere, 313=misto)
-   - Fallback: download manuale da https://land.copernicus.eu/en/products/corine-land-cover/clc2018
 
-2. **Tree Cover Density HRL 2018** (densita copertura arborea):
-   - Fonte: CLMS Download API (richiede `CLMS_SERVICE_KEY_FILE`)
+2. **Tree Cover Density HRL 2018** (opzionale):
+   - Fonte: WEkEO (`EO:EEA:DAT:HRL:TCF`)
    - Risoluzione: 10m, valori 0-100 (percentuale copertura)
-   - Opzionale: complemento a CORINE per scoring piu preciso
 
-3. **Dominant Leaf Type HRL 2018** (tipo foglia dominante):
-   - Fonte: CLMS Download API (richiede `CLMS_SERVICE_KEY_FILE`)
+3. **Dominant Leaf Type HRL 2018** (opzionale):
+   - Fonte: WEkEO (`EO:EEA:DAT:HRL:TCF`)
    - Risoluzione: 10m, classificazione 0=non-albero, 1=latifoglie, 2=conifere
-   - Opzionale: complemento a CORINE a risoluzione maggiore
 
-4. **Classificazione suolo** (tipo di suolo):
-   - Fonte: ISRIC SoilGrids WRB (open access, no auth)
-   - Risoluzione: 250m, copertura globale
-   - Codici WRB mappati a calcareous/siliceous/mixed in `PostGISForestClient.swift`
-   - Alternativa manuale: ESDAC (richiede registrazione JRC gratuita)
-
-5. **Copernicus DEM GLO-25** (altitudine 25m + aspetto derivato):
-   - Fonte: AWS Open Data `s3://copernicus-dem-25m/` (public, no auth)
-   - Risoluzione: 25m, ~144 tile da 1° per l'Italia
+4. **Copernicus DEM GLO-30** (altitudine 30m + aspetto derivato):
+   - Fonte: WEkEO (`EO:ESA:DAT:COP-DEM`) con bbox Italia
+   - Risoluzione: 30m (ricampionato a griglia 500m nella pipeline)
    - Genera automaticamente il raster aspetto via `gdaldem aspect`
    - Tabelle PostGIS: `copernicus_dem` (elevazione in metri), `dem_aspect` (gradi 0-360, 0=flat)
+
+5. **Classificazione suolo** (tipo di suolo):
+   - Fonte: ISRIC SoilGrids WRB (open access, nessuna autenticazione) — non su WEkEO
+   - Download automatico: lo script prova VRT → WCS → COG con fallback progressivo
+   - Risoluzione: 250m, copertura globale
+   - Codici WRB mappati a calcareous/siliceous/mixed in `PostGISForestClient.swift`
 
 ### Import in PostGIS
 
@@ -171,10 +175,25 @@ make geodata-import
 Oppure manualmente:
 
 ```bash
-bash scripts/import-geodata.sh
+python3 scripts/import-geodata.py
 ```
 
-Lo script verifica la presenza dei file in `data/geodata/`, riprojetta a EPSG:4326, e importa con `raster2pgsql`.
+Per importare solo dataset specifici:
+
+```bash
+python3 scripts/import-geodata.py corine dem soil aspect
+```
+
+Dataset disponibili: `corine`, `tcd`, `dlt`, `dem`, `soil`, `aspect`
+
+Lo script:
+1. Autentica con WEkEO (se necessario per i dataset richiesti)
+2. Scarica i dati via HDA con timeout (120s search, 30min download)
+3. Riprojetta e clippa ogni raster all'estensione Italia (EPSG:4326)
+4. Importa in PostGIS con `raster2pgsql`
+5. Verifica le tabelle importate
+
+Se un file raw esiste gia in `data/geodata/`, salta il download WEkEO.
 
 ### Verifica import
 
@@ -285,7 +304,7 @@ La pipeline logga ogni fase con label `funghi.pipeline.*`:
 funghi.pipeline          — Orchestratore (durata fasi, conteggio punti)
 funghi.pipeline.weather.openmeteo — Richieste HTTP Open-Meteo
 funghi.pipeline.weather.cache     — Hit/miss cache Redis meteo
-funghi.pipeline.geodata.altitude  — Query PostGIS altitudine/aspetto (o HTTP se openmeteo)
+funghi.pipeline.geodata.altitude  — Query PostGIS altitudine/aspetto
 funghi.pipeline.geodata.postgis   — Query raster PostGIS
 funghi.admin             — Trigger endpoint, autorizzazione
 ```
@@ -302,3 +321,4 @@ funghi.admin             — Trigger endpoint, autorizzazione
 | `postgis_raster extension not found` | PostGIS raster non installato | Usare immagine Docker `postgis/postgis:16-3.5` (gia configurata) |
 | Redis connection refused | Redis non avviato | `make services-up` |
 | Troppi errori 429 da Open-Meteo | Rate limiting | Ridurre `maxConcurrentRequests` in `app.yaml` |
+| DEM download lento | Tile COG via `/vsicurl/` | Necessita connessione internet; ~160 tile da ~5-30MB ciascuno |
