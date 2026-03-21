@@ -6,7 +6,7 @@ func routes(_ app: Application) throws {
     }
 
     // Serve index.html at root
-    app.get { req in
-        req.fileio.streamFile(at: req.application.directory.publicDirectory + "index.html")
+    app.get { req async throws in
+        try await req.fileio.asyncStreamFile(at: req.application.directory.publicDirectory + "index.html")
     }
 }
