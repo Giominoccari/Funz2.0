@@ -207,6 +207,7 @@ LOAD_ENV_BETA = if [ -f .env.beta ]; then while IFS= read -r _line || [ -n "$$_l
 beta-geodata-import: $(GEODATA_VENV)/bin/hda ## Import geodata into beta PostGIS
 	@$(LOAD_ENV_BETA) && \
 		DATABASE_URL=postgres://funghimap:funghimap_beta@127.0.0.1:5432/funghimap_beta \
+		PYTHONUNBUFFERED=1 \
 		$(GEODATA_PYTHON) infra/scripts/import-geodata.py
 
 beta-clean: ## Remove beta Docker volumes (DESTROYS beta data)
