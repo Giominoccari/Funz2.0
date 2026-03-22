@@ -10,7 +10,7 @@ LOAD_ENV = if [ -f .env ]; then while IFS= read -r _line || [ -n "$$_line" ]; do
        beta-db-up beta-db-down beta-db-shell beta-db-setup \
        beta-redis-up beta-redis-down \
        beta-app-up beta-app-down beta-app-restart beta-app-logs \
-       beta-setup beta-ssl-renew
+       beta-setup beta-ssl-renew beta-geodata-import
 
 # ─── Start everything ───────────────────────────────────────────────
 up: ## Start Postgres + Redis, setup DB, build and run Vapor server
