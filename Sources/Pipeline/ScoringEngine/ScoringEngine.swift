@@ -37,7 +37,12 @@ struct ScoringEngine: Sendable {
             + (1.0 - weights.humidityMultiplierMin) * hs
         let weatherScore = rawWeather * humidityMultiplier
 
-        let finalScore = min(1.0, max(0.0, baseScore * weatherScore))
+        // Base score gates: no habitat = no mushrooms, regardless of weather.
+        // Multiplication is correct semantically, but compresses the range.
+        // We apply sqrt to the product to expand the usable color range
+        // while preserving the gating behavior (0 * anything = 0).
+        let product = baseScore * weatherScore
+        let finalScore = min(1.0, max(0.0, sqrt(product)))
 
         return Result(
             latitude: input.point.latitude,

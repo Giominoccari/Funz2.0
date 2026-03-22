@@ -19,8 +19,8 @@ pipeline:
     humidityMultiplierMin: 0.4
   weather:
     baseURL: "https://archive-api.open-meteo.com/v1/archive"
-    maxConcurrentRequests: 50
-    retryMaxAttempts: 3
+    maxConcurrentRequests: 10
+    retryMaxAttempts: 5
     retryBaseDelayMs: 500
     cacheTTLSeconds: 86400
 

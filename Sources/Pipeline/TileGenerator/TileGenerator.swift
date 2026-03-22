@@ -22,6 +22,18 @@ struct TileGenerator: Sendable {
         let phaseStart = ContinuousClock.now
         let interpolator = IDWInterpolator(results: results)
 
+        // Compute actual score range for dynamic colormap stretching
+        let scores = results.map(\.score).filter { $0 > 0.001 }
+        let scoreRange: (min: Double, max: Double)? = scores.isEmpty ? nil : (
+            min: scores.min()!,
+            max: scores.max()!
+        )
+        Self.logger.info("Score range for colormap", metadata: [
+            "min": "\(scoreRange?.min ?? 0)",
+            "max": "\(scoreRange?.max ?? 0)",
+            "nonZeroPoints": "\(scores.count)"
+        ])
+
         var tiles: [GeneratedTile] = []
 
         for zoom in tileZoomMin...tileZoomMax {
@@ -29,7 +41,7 @@ struct TileGenerator: Sendable {
             let tileCoords = TileMath.tilesForBBox(bbox, zoom: zoom)
 
             for coord in tileCoords {
-                if let tile = renderTile(coord: coord, interpolator: interpolator) {
+                if let tile = renderTile(coord: coord, interpolator: interpolator, scoreRange: scoreRange) {
                     tiles.append(tile)
                 }
             }
@@ -51,7 +63,8 @@ struct TileGenerator: Sendable {
 
     private func renderTile(
         coord: TileMath.TileCoord,
-        interpolator: IDWInterpolator
+        interpolator: IDWInterpolator,
+        scoreRange: (min: Double, max: Double)?
     ) -> GeneratedTile? {
         let size = TileMath.tileSize
         var pixels: [PNG.RGBA<UInt8>] = []
@@ -66,7 +79,7 @@ struct TileGenerator: Sendable {
                 )
 
                 if let score = interpolator.interpolate(latitude: lat, longitude: lon) {
-                    let color = Colormap.color(for: score)
+                    let color = Colormap.color(for: score, scoreRange: scoreRange)
                     pixels.append(.init(color.r, color.g, color.b, color.a))
                     if color.a > 0 { hasData = true }
                 } else {

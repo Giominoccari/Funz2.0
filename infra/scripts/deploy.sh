@@ -3,9 +3,9 @@
 # Funghi Map — Build, push to ECR, and deploy to ECS Fargate
 #
 # Usage:
-#   ./infra/scripts/deploy.sh                  # deploy both api + worker
-#   ./infra/scripts/deploy.sh --api-only       # deploy api service only
-#   ./infra/scripts/deploy.sh --worker-only    # update worker task def only
+#   make deploy                                 # deploy both api + worker
+#   make deploy-api                             # deploy api service only
+#   make deploy-worker                          # update worker task def only
 #
 # Required env vars:
 #   AWS_ACCOUNT_ID   — AWS account ID
@@ -52,7 +52,7 @@ aws ecr get-login-password --region "${AWS_REGION}" | \
 echo "▶ Building Docker image..."
 docker build \
     --platform linux/amd64 \
-    -f infra/Dockerfile \
+    -f infra/docker/Dockerfile \
     -t "${IMAGE_NAME}:${IMAGE_TAG}" \
     -t "${IMAGE_NAME}:latest" \
     .

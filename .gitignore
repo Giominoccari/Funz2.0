@@ -67,8 +67,10 @@ fastlane/test_output
 # Funz2.0
 Keys/*
 data/geodata/
+Storage/tiles
 .venv/
 .env
+.env.*
 config/secrets.yaml
 secrets/
 *-service-key.json

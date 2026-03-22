@@ -9,6 +9,8 @@ actor PipelineRunner {
     private let forestClient: any ForestCoverageClient
     private let altitudeClient: any AltitudeClient
     private let tileUploader: any TileUploader
+    private let dbSemaphore: AsyncSemaphore
+    private let weatherSemaphore: AsyncSemaphore
 
     init(
         config: PipelineConfig,
@@ -22,6 +24,8 @@ actor PipelineRunner {
         self.forestClient = forestClient
         self.altitudeClient = altitudeClient
         self.tileUploader = tileUploader
+        self.dbSemaphore = AsyncSemaphore(value: 20)
+        self.weatherSemaphore = AsyncSemaphore(value: 20)
     }
 
     func run(bbox: BoundingBox) async throws -> [ScoringEngine.Result] {
@@ -132,6 +136,8 @@ actor PipelineRunner {
             ) { group in
                 for point in batch {
                     group.addTask {
+                        await self.dbSemaphore.wait()
+                        defer { Task { await self.dbSemaphore.signal() } }
                         do {
                             var p = point
                             p.altitude = try await self.altitudeClient.altitude(
@@ -182,47 +188,83 @@ actor PipelineRunner {
         return enriched
     }
 
+    /// Weather varies slowly over space (~10km resolution is sufficient).
+    /// Instead of fetching 24K+ points, we sample a coarse grid and map each
+    /// fine-grid point to its nearest coarse sample.
     private func fetchWeather(for points: [GridPoint]) async -> [String: WeatherData] {
-        let batchSize = config.batchSize
-        var weatherMap: [String: WeatherData] = [:]
+        let defaultWeather = WeatherData(rain14d: 0, avgTemperature: 0, avgHumidity: 0)
+        guard let first = points.first else { return [:] }
+
+        // Determine bbox from points
+        var minLat = first.latitude, maxLat = first.latitude
+        var minLon = first.longitude, maxLon = first.longitude
+        for p in points {
+            minLat = min(minLat, p.latitude)
+            maxLat = max(maxLat, p.latitude)
+            minLon = min(minLon, p.longitude)
+            maxLon = max(maxLon, p.longitude)
+        }
+
+        // Generate coarse weather grid (~10km spacing ≈ 0.09° latitude)
+        let weatherStepDeg = 0.09
+        var coarsePoints: [(lat: Double, lon: Double)] = []
+        var lat = minLat
+        while lat <= maxLat + weatherStepDeg {
+            var lon = minLon
+            while lon <= maxLon + weatherStepDeg {
+                coarsePoints.append((lat, lon))
+                lon += weatherStepDeg
+            }
+            lat += weatherStepDeg
+        }
+
+        logger.info("Weather coarse grid", metadata: [
+            "coarsePoints": "\(coarsePoints.count)",
+            "finePoints": "\(points.count)",
+            "ratio": "\(String(format: "%.0f", Double(points.count) / Double(max(1, coarsePoints.count))))x reduction"
+        ])
+
+        // Fetch weather for coarse grid points
+        var coarseWeather: [(lat: Double, lon: Double, data: WeatherData)] = []
         var failedCount = 0
 
-        for batchStart in stride(from: 0, to: points.count, by: batchSize) {
-            let batchEnd = min(batchStart + batchSize, points.count)
-            let batch = points[batchStart..<batchEnd]
+        for batchStart in stride(from: 0, to: coarsePoints.count, by: config.batchSize) {
+            let batchEnd = min(batchStart + config.batchSize, coarsePoints.count)
+            let batch = coarsePoints[batchStart..<batchEnd]
 
             let batchResults = await withTaskGroup(
-                of: (String, WeatherData?, Error?).self
+                of: (Double, Double, WeatherData?, Error?).self
             ) { group in
-                for point in batch {
+                for cp in batch {
                     group.addTask {
-                        let key = "\(point.latitude),\(point.longitude)"
+                        await self.weatherSemaphore.wait()
+                        defer { Task { await self.weatherSemaphore.signal() } }
                         do {
                             let weather = try await self.weatherClient.fetch(
-                                latitude: point.latitude, longitude: point.longitude
+                                latitude: cp.lat, longitude: cp.lon
                             )
-                            return (key, weather, nil)
+                            return (cp.lat, cp.lon, weather, nil)
                         } catch {
-                            return (key, nil, error)
+                            return (cp.lat, cp.lon, nil, error)
                         }
                     }
                 }
-                var results: [(String, WeatherData?, Error?)] = []
+                var results: [(Double, Double, WeatherData?, Error?)] = []
                 for await result in group {
                     results.append(result)
                 }
                 return results
             }
 
-            for (key, weather, error) in batchResults {
+            for (clat, clon, weather, error) in batchResults {
                 if let weather {
-                    weatherMap[key] = weather
+                    coarseWeather.append((clat, clon, weather))
                 } else {
                     failedCount += 1
-                    weatherMap[key] = WeatherData(rain14d: 0, avgTemperature: 0, avgHumidity: 0)
+                    coarseWeather.append((clat, clon, defaultWeather))
                     if let error {
-                        logger.warning("Weather fetch failed for point", metadata: [
-                            "key": "\(key)",
+                        logger.warning("Weather fetch failed", metadata: [
+                            "lat": "\(clat)", "lon": "\(clon)",
                             "error": "\(error)"
                         ])
                     }
@@ -233,8 +275,53 @@ actor PipelineRunner {
         if failedCount > 0 {
             logger.warning("Weather fetch completed with failures", metadata: [
                 "failed": "\(failedCount)",
-                "total": "\(points.count)"
+                "total": "\(coarsePoints.count)"
             ])
+        }
+
+        // IDW-interpolate weather from coarse grid to each fine-grid point
+        // so transitions are smooth instead of blocky nearest-neighbor jumps.
+        var weatherMap: [String: WeatherData] = [:]
+        weatherMap.reserveCapacity(points.count)
+
+        for point in points {
+            let key = "\(point.latitude),\(point.longitude)"
+
+            var weightedRain = 0.0
+            var weightedTemp = 0.0
+            var weightedHum = 0.0
+            var totalWeight = 0.0
+
+            for cw in coarseWeather {
+                let dLat = point.latitude - cw.lat
+                let dLon = point.longitude - cw.lon
+                let distSq = dLat * dLat + dLon * dLon
+
+                if distSq < 1e-12 {
+                    // Exactly on a coarse point
+                    weightedRain = cw.data.rain14d
+                    weightedTemp = cw.data.avgTemperature
+                    weightedHum = cw.data.avgHumidity
+                    totalWeight = 1.0
+                    break
+                }
+
+                let weight = 1.0 / (distSq * distSq) // power=4 for smoother falloff
+                weightedRain += weight * cw.data.rain14d
+                weightedTemp += weight * cw.data.avgTemperature
+                weightedHum += weight * cw.data.avgHumidity
+                totalWeight += weight
+            }
+
+            if totalWeight > 0 {
+                weatherMap[key] = WeatherData(
+                    rain14d: weightedRain / totalWeight,
+                    avgTemperature: weightedTemp / totalWeight,
+                    avgHumidity: weightedHum / totalWeight
+                )
+            } else {
+                weatherMap[key] = defaultWeather
+            }
         }
 
         return weatherMap

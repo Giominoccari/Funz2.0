@@ -1,0 +1,70 @@
+# Beta server — Docker services only (nginx + certbot run on host)
+# Usage: docker compose -f infra/docker/docker-compose.beta.yml up -d
+
+services:
+  postgres:
+    image: postgis/postgis:16-3.5
+    platform: linux/amd64
+    container_name: funz-beta-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: funghimap
+      POSTGRES_PASSWORD: ${BETA_DB_PASSWORD:-funghimap_beta}
+      POSTGRES_DB: funghimap_beta
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - beta_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U funghimap -d funghimap_beta"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: funz-beta-redis
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - beta_redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile
+    image: funz-beta:latest
+    container_name: funz-beta-app
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://funghimap:${BETA_DB_PASSWORD:-funghimap_beta}@postgres:5432/funghimap_beta
+      REDIS_URL: redis://redis:6379
+      JWT_PRIVATE_KEY_FILE: /app/Keys/jwt_private.pem
+      ADMIN_API_KEY: ${ADMIN_API_KEY}
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+    volumes:
+      - ../../Keys:/app/Keys:ro
+    ports:
+      - "127.0.0.1:8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+
+volumes:
+  beta_pgdata:
+  beta_redisdata:

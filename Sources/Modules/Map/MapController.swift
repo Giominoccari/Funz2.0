@@ -11,6 +11,8 @@ struct MapController: RouteCollection, Sendable {
         // Tile endpoint: JWT auth + subscription entitlements for zoom gating
         let protectedMap = map.grouped(JWTAuthMiddleware(), SubscriptionMiddleware())
         protectedMap.get("tiles", ":date", ":z", ":x", ":y", use: getTile)
+        // Dev-only: unauthenticated tile access (local files only, no S3)
+        map.get("dev-tiles", ":date", ":z", ":x", ":y", use: getDevTile)
         // Dates listing remains public
         map.get("dates", use: getDates)
     }
@@ -63,6 +65,30 @@ struct MapController: RouteCollection, Sendable {
 
         // 3. Neither local nor S3 available
         throw Abort(.notFound, reason: "Tile not found")
+    }
+
+    // MARK: - GET /map/dev-tiles/:date/:z/:x/:y (unauthenticated, local only)
+
+    @Sendable
+    func getDevTile(req: Request) async throws -> Response {
+        guard req.application.environment != .production else {
+            throw Abort(.notFound)
+        }
+        guard let date = req.parameters.get("date"),
+              let zStr = req.parameters.get("z"), let z = Int(zStr),
+              let xStr = req.parameters.get("x"), let x = Int(xStr),
+              let yStr = req.parameters.get("y"), let y = Int(yStr)
+        else {
+            throw Abort(.badRequest, reason: "Invalid tile parameters")
+        }
+        guard (6...12).contains(z) else {
+            throw Abort(.badRequest, reason: "Zoom must be between 6 and 12")
+        }
+        let localPath = req.application.directory.workingDirectory + "Storage/tiles/\(date)/\(z)/\(x)/\(y).png"
+        guard FileManager.default.fileExists(atPath: localPath) else {
+            throw Abort(.notFound)
+        }
+        return try await req.fileio.asyncStreamFile(at: localPath)
     }
 
     // MARK: - GET /map/dates

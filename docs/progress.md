@@ -139,7 +139,7 @@ Sostituiti tutti i client mock della pipeline con implementazioni reali, prima t
 - **`CachedAltitudeClient`**: wrapper Redis cache (TTL 7 giorni, dati statici)
 - **`PostGISForestClient`**: implementa `ForestCoverageClient` con query `ST_Value()` su raster PostGIS via SQLKit. Mapping CORINE CLC (311→broadleaf, 312→coniferous, 313→mixed) e ESDAC soil
 - **`CreateRasterExtensions`**: migration per abilitare `postgis` + `postgis_raster` extensions
-- **`scripts/import-geodata.sh`**: script per download e import GeoTIFF CORINE/ESDAC in PostGIS con `raster2pgsql`
+- **`infra/scripts/import-geodata.sh`**: script per download e import GeoTIFF CORINE/ESDAC in PostGIS con `raster2pgsql`
 - **Config**: aggiunto `GeoDataConfig` in `PipelineConfig` + sezione `geoData:` in `app.yaml`
 
 **Pipeline resilienza errori**:
@@ -217,7 +217,7 @@ Implementato il modulo abbonamenti con sistema di entitlements config-driven per
 
 Infrastruttura completa per deploy su AWS ECS Fargate con due container (api always-on + worker on-demand):
 
-**Dockerfile multi-stage** (`infra/Dockerfile`):
+**Dockerfile multi-stage** (`infra/docker/Dockerfile`):
 - Stage 1: build Swift 6 release con static linking su `swift:6.0-jammy`
 - Stage 2: runtime minimale `ubuntu:22.04` (~80MB). Binary + config + Public/ copiati dal build stage
 - Singola immagine, due modalità: `CMD ["serve", ...]` (default, API) oppure override `["worker", "--bbox", "italy"]` per pipeline
@@ -244,7 +244,7 @@ Infrastruttura completa per deploy su AWS ECS Fargate con due container (api alw
 - EventBridge rule: `cron(0 2 * * ? *)` lancia worker task ogni notte alle 02:00 UTC
 - Parametri: VPC/subnet IDs, image URI, ARN di tutti i segreti
 
-**Deploy script** (`infra/scripts/deploy.sh`):
+**Deploy script** (`infra/scripts/deploy.sh` — unchanged path):
 - ECR login → Docker build (linux/amd64) → push con tag git SHA + latest
 - Registra nuove task definition da template JSON (sostituisce ACCOUNT_ID e image)
 - Force new deployment su API service + wait for stability
@@ -254,9 +254,9 @@ Infrastruttura completa per deploy su AWS ECS Fargate con due container (api alw
 
 ### GeoData import consolidato in singolo script Python (2026-03-16)
 
-Consolidati `scripts/download-geodata.py` + `scripts/import-geodata.sh` in un unico `scripts/import-geodata.py` — download WEkEO HDA + reproject + clip Italia + import PostGIS:
+Consolidati `scripts/download-geodata.py` + `scripts/import-geodata.sh` in un unico `infra/scripts/import-geodata.py` — download WEkEO HDA + reproject + clip Italia + import PostGIS:
 
-- **`scripts/import-geodata.py`**: script Python unico che sostituisce entrambi i vecchi script. Usa WEkEO HDA (`hda`) per download CORINE/TCD/DLT/DEM, ISRIC SoilGrids per suolo, GDAL CLI per reproject/clip, `raster2pgsql | psql` per import PostGIS
+- **`infra/scripts/import-geodata.py`**: script Python unico che sostituisce entrambi i vecchi script. Usa WEkEO HDA (`hda`) per download CORINE/TCD/DLT/DEM, ISRIC SoilGrids per suolo, GDAL CLI per reproject/clip, `raster2pgsql | psql` per import PostGIS
 - **Timeout su WEkEO**: `client.search()` e `download()` wrappati con `ThreadPoolExecutor` + timeout (120s search, 30min download) per prevenire hang infiniti
 - **DEM con bbox Italia**: query WEkEO con `bbox: [6.5, 36.5, 18.5, 47.5]` per scaricare solo tile che coprono l'Italia. Supporta anche tile WEkEO gia scaricati (ZIP in `data/geodata/dem_tiles/`)
 - **Soil da ISRIC SoilGrids**: cascade VRT → WCS → COG (invariato, non su WEkEO)

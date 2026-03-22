@@ -12,11 +12,23 @@ struct RGBA: Sendable, Equatable {
 enum Colormap {
     // Green (low) → Yellow (mid) → Red (high)
     // Stops: 0.0=green, 0.5=yellow, 1.0=red
-    static func color(for score: Double) -> RGBA {
-        let s = min(1.0, max(0.0, score))
+    //
+    // `scoreRange` stretches the color ramp so that `minScore` maps to the
+    // bottom of the gradient and `maxScore` maps to the top. This avoids
+    // uniform-looking tiles when all scores cluster in a narrow band.
+    static func color(for score: Double, scoreRange: (min: Double, max: Double)? = nil) -> RGBA {
+        let clamped = min(1.0, max(0.0, score))
 
-        if s < 0.001 {
+        if clamped < 0.001 {
             return .transparent
+        }
+
+        // Normalize score to 0-1 within the actual data range
+        let s: Double
+        if let range = scoreRange, range.max - range.min > 0.001 {
+            s = min(1.0, max(0.0, (clamped - range.min) / (range.max - range.min)))
+        } else {
+            s = clamped
         }
 
         let r: Double

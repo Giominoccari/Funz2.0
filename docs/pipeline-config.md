@@ -126,7 +126,7 @@ In assenza di raster, la pipeline usa valori di default (`.none` per foresta, `.
 
 ### Fonti dati e download
 
-Lo script `scripts/import-geodata.py` gestisce download (via WEkEO HDA), reprojection a EPSG:4326, clip all'estensione Italia, e import in PostGIS.
+Lo script `infra/scripts/import-geodata.py` gestisce download (via WEkEO HDA), reprojection a EPSG:4326, clip all'estensione Italia, e import in PostGIS.
 
 ### Prerequisito: Account WEkEO
 
@@ -175,13 +175,13 @@ make geodata-import
 Oppure manualmente:
 
 ```bash
-python3 scripts/import-geodata.py
+python3 infra/scripts/import-geodata.py
 ```
 
 Per importare solo dataset specifici:
 
 ```bash
-python3 scripts/import-geodata.py corine dem soil aspect
+python3 infra/scripts/import-geodata.py corine dem soil aspect
 ```
 
 Dataset disponibili: `corine`, `tcd`, `dlt`, `dem`, `soil`, `aspect`

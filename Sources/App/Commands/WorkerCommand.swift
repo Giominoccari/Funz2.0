@@ -33,6 +33,15 @@ struct WorkerCommand: AsyncCommand {
 
         let config = try ConfigLoader.load()
         let httpClient = app.http.client.shared
+
+        // Verify Redis connectivity before pipeline
+        do {
+            let pong = try await app.redis.ping().get()
+            logger.info("Redis connected", metadata: ["ping": "\(pong)"])
+        } catch {
+            logger.warning("Redis not reachable, running without cache", metadata: ["error": "\(error)"])
+        }
+
         let redis = RedisWeatherCache(redis: app.redis)
 
         let openMeteo = OpenMeteoClient(
@@ -55,7 +64,8 @@ struct WorkerCommand: AsyncCommand {
             config: config.pipeline,
             weatherClient: weatherClient,
             forestClient: forestClient,
-            altitudeClient: altitudeClient
+            altitudeClient: altitudeClient,
+            tileUploader: LocalTileUploader()
         )
 
         let start = Date()

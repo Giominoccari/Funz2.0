@@ -27,8 +27,8 @@ WEkEO credentials:
     Register free at https://www.wekeo.eu
 
 Usage:
-    python3 scripts/import-geodata.py                   # All datasets
-    python3 scripts/import-geodata.py corine dem soil    # Specific ones
+    python3 infra/scripts/import-geodata.py                   # All datasets
+    python3 infra/scripts/import-geodata.py corine dem soil    # Specific ones
 """
 
 import math

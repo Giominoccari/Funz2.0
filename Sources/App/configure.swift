@@ -14,7 +14,14 @@ func configure(_ app: Application) async throws {
         logger.critical("DATABASE_URL environment variable is not set")
         fatalError("Missing required environment variable: DATABASE_URL")
     }
-    try app.databases.use(.postgres(url: databaseURL), as: .psql)
+    try app.databases.use(
+        .postgres(
+            url: databaseURL,
+            maxConnectionsPerEventLoop: 8,
+            connectionPoolTimeout: .seconds(30)
+        ),
+        as: .psql
+    )
     logger.info("PostgreSQL configured")
 
     // Redis
@@ -40,6 +47,14 @@ func configure(_ app: Application) async throws {
     let rsaKey = try Insecure.RSA.PrivateKey(pem: pemString)
     app.jwtKeys = await JWTKeyCollection().add(rsa: rsaKey, digestAlgorithm: .sha256)
     logger.info("JWT RS256 configured", metadata: ["keyFile": "\(jwtKeyPath)"])
+
+    // JSON date encoding: explicit ISO 8601 with fractional seconds
+    let jsonEncoder = JSONEncoder()
+    jsonEncoder.dateEncodingStrategy = .iso8601
+    let jsonDecoder = JSONDecoder()
+    jsonDecoder.dateDecodingStrategy = .iso8601
+    ContentConfiguration.global.use(encoder: jsonEncoder, for: .json)
+    ContentConfiguration.global.use(decoder: jsonDecoder, for: .json)
 
     // Static files (Public/)
     app.middleware.use(FileMiddleware(publicDirectory: app.directory.publicDirectory))

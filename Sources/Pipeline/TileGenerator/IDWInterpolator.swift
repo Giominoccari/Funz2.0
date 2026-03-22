@@ -8,7 +8,7 @@ struct IDWInterpolator: Sendable {
     init(
         results: [ScoringEngine.Result],
         power: Double = 2.0,
-        searchRadius: Double = 0.02  // ~2km at mid-latitudes
+        searchRadius: Double = 0.06  // ~6km at mid-latitudes
     ) {
         self.power = power
         self.searchRadius = searchRadius

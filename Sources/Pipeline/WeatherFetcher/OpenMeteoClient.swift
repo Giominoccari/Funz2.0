@@ -47,7 +47,9 @@ struct OpenMeteoClient: WeatherClient {
                     lastError = WeatherFetchError.httpError(
                         statusCode: UInt(status), latitude: roundedLat, longitude: roundedLon
                     )
-                    let delay = retryBaseDelayMs * (1 << attempt)
+                    let baseDelay = retryBaseDelayMs * (1 << attempt)
+                    let jitter = Int.random(in: 0...(baseDelay / 2))
+                    let delay = baseDelay + jitter
                     Self.logger.warning("Retrying weather fetch", metadata: [
                         "attempt": "\(attempt + 1)",
                         "status": "\(status)",

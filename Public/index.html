@@ -2,12 +2,13 @@
 <html lang="it">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Funghi Map — Tile Viewer</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Funghi Map</title>
     <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
     <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
+        html, body { width: 100%; height: 100%; overflow: hidden; }
         body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; }
         #map { position: absolute; top: 0; bottom: 0; width: 100%; }
     </style>
@@ -15,9 +16,27 @@
 <body>
     <div id="map"></div>
     <script>
-        let currentDate = new Date().toISOString().slice(0, 10);
-        let currentOpacity = 0.7;
+        // ── Parse query parameters from the URL ──
+        const params = new URLSearchParams(window.location.search);
+        const initLat = parseFloat(params.get('lat')) || 46.07;
+        const initLon = parseFloat(params.get('lon')) || 11.12;
+        const initZoom = parseInt(params.get('zoom'), 10) || 8;
+        const authToken = params.get('token') || '';
 
+        let currentDate = params.get('date') || new Date().toISOString().slice(0, 10);
+        let currentOpacity = 0.7;
+        let heatThreshold = 20;
+        let heatShowAll = false;
+
+        // ── Tile URL builder (uses auth tiles if token present, dev-tiles otherwise) ──
+        function tileURLTemplate(date) {
+            if (authToken) {
+                return window.location.origin + `/map/tiles/${date}/{z}/{x}/{y}`;
+            }
+            return `/map/dev-tiles/${date}/{z}/{x}/{y}`;
+        }
+
+        // ── Map initialization ──
         const map = new maplibregl.Map({
             container: 'map',
             style: {
@@ -38,14 +57,27 @@
                     maxzoom: 19
                 }]
             },
-            center: [11.12, 46.07],
-            zoom: 8,
+            center: [initLon, initLat],
+            zoom: initZoom,
             minZoom: 6,
             maxZoom: 12
         });
 
         map.addControl(new maplibregl.NavigationControl(), 'top-right');
 
+        // ── If using auth token, add it to tile requests via transformRequest ──
+        if (authToken) {
+            map.setTransformRequest((url, resourceType) => {
+                if (resourceType === 'Tile' && url.startsWith(window.location.origin)) {
+                    return {
+                        url: url,
+                        headers: { 'Authorization': 'Bearer ' + authToken }
+                    };
+                }
+            });
+        }
+
+        // ── Funghi overlay ──
         function loadOverlay(date) {
             const sourceId = 'funghi-tiles';
             const layerId = 'funghi-layer';
@@ -57,7 +89,7 @@
 
             map.addSource(sourceId, {
                 type: 'raster',
-                tiles: [`/map/tiles/${date}/{z}/{x}/{y}`],
+                tiles: [tileURLTemplate(date)],
                 tileSize: 256,
                 minzoom: 6,
                 maxzoom: 12
@@ -67,9 +99,7 @@
                 id: layerId,
                 type: 'raster',
                 source: sourceId,
-                paint: {
-                    'raster-opacity': currentOpacity
-                }
+                paint: { 'raster-opacity': currentOpacity }
             });
         }
 
@@ -80,8 +110,149 @@
             }
         }
 
+        // ── POI markers ──
+        const poiMarkers = [];
+
+        function clearPOIs() {
+            poiMarkers.forEach(m => m.remove());
+            poiMarkers.length = 0;
+        }
+
+        function renderPOIs(pois) {
+            clearPOIs();
+            if (!Array.isArray(pois)) return;
+            pois.forEach(poi => {
+                const el = document.createElement('div');
+                el.style.cssText = 'width:12px;height:12px;border-radius:50%;background:#e74c3c;border:2px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,.4);cursor:pointer;';
+                el.title = poi.name || '';
+
+                const marker = new maplibregl.Marker({ element: el })
+                    .setLngLat([poi.lon, poi.lat])
+                    .addTo(map);
+
+                if (poi.name) {
+                    marker.setPopup(new maplibregl.Popup({ offset: 10 }).setText(poi.name));
+                }
+                poiMarkers.push(marker);
+            });
+        }
+
+        // ── User location marker ──
+        let userMarker = null;
+
+        function setUserLocation(lat, lon) {
+            if (!userMarker) {
+                const el = document.createElement('div');
+                el.style.cssText = 'width:16px;height:16px;border-radius:50%;background:#4285F4;border:3px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.4);';
+                userMarker = new maplibregl.Marker({ element: el }).setLngLat([lon, lat]).addTo(map);
+            } else {
+                userMarker.setLngLat([lon, lat]);
+            }
+        }
+
+        // ── Live track polyline ──
+        function renderTrack(coords) {
+            const geojson = {
+                type: 'Feature',
+                geometry: {
+                    type: 'LineString',
+                    coordinates: coords.map(c => [c.lon, c.lat])
+                }
+            };
+
+            if (map.getSource('live-track')) {
+                map.getSource('live-track').setData(geojson);
+            } else {
+                map.addSource('live-track', { type: 'geojson', data: geojson });
+                map.addLayer({
+                    id: 'live-track-line',
+                    type: 'line',
+                    source: 'live-track',
+                    paint: {
+                        'line-color': '#FF6B00',
+                        'line-width': 3,
+                        'line-opacity': 0.85
+                    }
+                });
+            }
+        }
+
+        // ── Map click → send coordinates back to native app ──
+        map.on('click', (e) => {
+            const lat = e.lngLat.lat;
+            const lon = e.lngLat.lng;
+
+            // Query the funghi overlay pixel value at click point (approximate via tile)
+            let value = 0;
+            const features = map.queryRenderedFeatures(e.point, { layers: ['funghi-layer'] });
+            // Raster layers don't expose pixel values via queryRenderedFeatures,
+            // so we send 0 and let the native side handle lookup if needed.
+
+            // Send to native WKWebView
+            if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.coordinateHandler) {
+                window.webkit.messageHandlers.coordinateHandler.postMessage({
+                    lat: lat,
+                    lon: lon,
+                    value: value
+                });
+            }
+        });
+
+        // ── Bridge: Native → Web functions ──
+
+        // Called by MapBridge.pushLocation(_:)
+        window.onNativeLocation = function(wloc) {
+            if (wloc && typeof wloc.latitude === 'number' && typeof wloc.longitude === 'number') {
+                setUserLocation(wloc.latitude, wloc.longitude);
+                map.flyTo({ center: [wloc.longitude, wloc.latitude], duration: 800 });
+            }
+        };
+
+        // Called by MapBridge.pushLiveTrack(_:)
+        window.onNativeTrack = function(coords) {
+            if (Array.isArray(coords) && coords.length > 0) {
+                renderTrack(coords);
+            }
+        };
+
+        // Called by MapBridge.setHeatOptions(threshold:allPoints:)
+        window.setHeatOptions = function(opts) {
+            if (!opts) return;
+            if (typeof opts.threshold === 'number') heatThreshold = opts.threshold;
+            if (typeof opts.all === 'boolean') heatShowAll = opts.all;
+
+            // Adjust overlay opacity based on threshold (higher threshold = more transparent)
+            const opacity = heatShowAll ? 0.85 : Math.max(0.3, 1.0 - (heatThreshold / 100) * 0.7);
+            setOpacity(opacity);
+        };
+
+        // Called by MapBridge.pushPOIs(_:) via window.postMessage
+        window.addEventListener('message', (event) => {
+            const data = event.data;
+            if (!data || typeof data !== 'object') return;
+
+            if (data.type === 'poi.set' && Array.isArray(data.pois)) {
+                renderPOIs(data.pois);
+            }
+        });
+
+        // ── Forward console.log to native jsLogger handler (for debugging) ──
+        (function() {
+            const origLog = console.log;
+            console.log = function() {
+                origLog.apply(console, arguments);
+                if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.jsLogger) {
+                    window.webkit.messageHandlers.jsLogger.postMessage(
+                        Array.from(arguments).map(String).join(' ')
+                    );
+                }
+            };
+        })();
+
+        // ── Init ──
         map.on('load', () => {
             loadOverlay(currentDate);
+            console.log('Funghi Map loaded', { date: currentDate, lat: initLat, lon: initLon });
         });
     </script>
 </body>

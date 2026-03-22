@@ -38,9 +38,16 @@ Tests/
   IntegrationTests/
 config/
   app.yaml          # Config applicativa (versionata)
-  # secrets.yaml    # MAI in repo — usare AWS Secrets Manager
 docs/
   architecture.md   # Documento architetturale completo
+infra/
+  docker/           # Dockerfile, docker-compose.yml, docker-compose.beta.yml
+  scripts/          # db-setup.sh, deploy.sh, import-geodata.py
+  nginx/            # Nginx reverse proxy config (beta server)
+  beta/             # Beta server setup (certbot, DuckDNS)
+  ecs/              # ECS task definitions
+  cloudformation/   # AWS CloudFormation stack
+  Brewfile          # Dev dependencies (Homebrew)
 ```
 
 ## Regole di sviluppo
@@ -93,7 +100,7 @@ swift build                          # Build progetto
 swift test --parallel                # Tutti i test in parallelo
 swift test --filter ScoringEngineTests  # Test specifici
 vapor run serve --port 8080          # Avvio server locale
-docker compose up                    # Postgres + Redis locali
+make services-up                     # Postgres + Redis locali (Docker)
 ```
 
 ## Cosa NON fare

@@ -19,7 +19,6 @@ services:
 
   redis:
     image: redis:7-alpine
-    platform: linux/amd64
     container_name: funghimap-redis
     ports:
       - "6379:6379"
