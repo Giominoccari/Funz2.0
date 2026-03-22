@@ -202,10 +202,11 @@ beta-ssl-renew: ## Manually trigger certbot renewal
 beta-nginx-restart: ## Restart nginx
 	brew services restart nginx
 
+LOAD_ENV_BETA = if [ -f .env.beta ]; then while IFS= read -r _line || [ -n "$$_line" ]; do echo "$$_line" | grep -qE '^\s*($$|\#)' && continue; export "$$_line"; done < .env.beta; fi
+
 beta-geodata-import: $(GEODATA_VENV)/bin/hda ## Import geodata into beta PostGIS
-	@DATABASE_URL=postgres://funghimap:funghimap_beta@127.0.0.1:5432/funghimap_beta \
-		WEKEO_USERNAME=$$(grep WEKEO_USERNAME .env.beta | cut -d= -f2) \
-		WEKEO_PASSWORD=$$(grep WEKEO_PASSWORD .env.beta | cut -d= -f2) \
+	@$(LOAD_ENV_BETA) && \
+		DATABASE_URL=postgres://funghimap:funghimap_beta@127.0.0.1:5432/funghimap_beta \
 		$(GEODATA_PYTHON) infra/scripts/import-geodata.py
 
 beta-clean: ## Remove beta Docker volumes (DESTROYS beta data)
