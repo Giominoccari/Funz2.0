@@ -61,13 +61,16 @@ sed "s|DUCKDNS_DOMAIN|$DUCKDNS_DOMAIN|g" "$CONF_SOURCE" > "$CONF_DEST"
 # Also update certbot webroot path for Intel Macs
 sed -i '' "s|/opt/homebrew/var/www/certbot|$CERTBOT_WEBROOT|g" "$CONF_DEST"
 
+# Clean up any leftover backup from a previous run (nginx loads all files in servers/)
+rm -f "$NGINX_SERVERS/funghimap-beta.conf.pre-ssl"
+
 # Test nginx config (will fail on SSL certs not yet existing — that's expected)
 echo "▶ Testing nginx config (SSL errors are expected before certbot runs)..."
 nginx -t 2>&1 || true
 
 # ── 3. Start nginx (HTTP only first for certbot challenge) ──
-# Temporarily comment out the SSL server block so nginx can start on port 80
-CONF_TEMP="$CONF_DEST.pre-ssl"
+# Temporarily back up the full config OUTSIDE servers/ so nginx won't load it
+CONF_TEMP="/tmp/funghimap-beta.conf.pre-ssl"
 cp "$CONF_DEST" "$CONF_TEMP"
 
 # Create a minimal HTTP-only config for initial certbot

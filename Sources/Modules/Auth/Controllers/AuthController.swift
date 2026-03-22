@@ -134,8 +134,7 @@ struct AuthController: RouteCollection, Sendable {
     }
 
     private func generateRandomToken() -> String {
-        var bytes = [UInt8](repeating: 0, count: 32)
-        _ = bytes.withUnsafeMutableBytes { SecRandomCopyBytes(kSecRandomDefault, 32, $0.baseAddress!) }
+        let bytes = (0..<32).map { _ in UInt8.random(in: 0...255) }
         return Data(bytes).base64EncodedString()
             .replacingOccurrences(of: "+", with: "-")
             .replacingOccurrences(of: "/", with: "_")
