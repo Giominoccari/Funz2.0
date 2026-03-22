@@ -11,7 +11,7 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 # ── Load .env.beta ──
 if [ ! -f "$PROJECT_ROOT/.env.beta" ]; then
-    echo "ERROR: .env.beta not found. Copy .env.beta.example and fill in values."
+    echo "ERROR: .env.beta not found. Copy .env.beta.example and fill in values. project root = $PROJECT_ROOT/.env.beta"
     exit 1
 fi
 # shellcheck disable=SC1091
