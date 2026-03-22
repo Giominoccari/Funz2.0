@@ -5,7 +5,7 @@ import Logging
 import Redis
 import SQLKit
 import Vapor
-
+ 
 func configure(_ app: Application) async throws {
     let logger = Logger(label: "funghi.boot")
 
