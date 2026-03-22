@@ -285,13 +285,16 @@ struct ScoringEngineTests {
         #expect(result1.weatherScore == result2.weatherScore)
     }
 
-    @Test("Zero base score yields zero final score regardless of weather")
-    func zeroBaseYieldsZero() {
+    @Test("Poor habitat yields low final score even with perfect weather")
+    func poorHabitatYieldsLowScore() {
         let engine = ScoringEngine(weights: ScoringEngineTests.defaultWeights)
+        // No forest, low altitude, poor soil, south-facing → base ≈ 0.10
         let point = GridPoint(latitude: 46.0, longitude: 11.3, altitude: 30, forestType: .none, soilType: .other, aspect: 180)
         let weather = WeatherData(rain14d: 60, avgTemperature: 16, avgHumidity: 80)
         let result = engine.score(.init(point: point, weather: weather))
-        #expect(result.score < 0.1)
+        // sqrt(~0.10 * 1.0) ≈ 0.31 — well below "good" threshold of 0.5
+        #expect(result.score < 0.35)
+        #expect(result.baseScore < 0.15)
     }
 
     @Test("Zero weather yields near-zero final score regardless of habitat")

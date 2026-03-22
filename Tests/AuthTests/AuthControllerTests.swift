@@ -48,8 +48,8 @@ pNrnY0pTbRYvk5c0ZNNcPk6MYg==
         let rsaKey = try Insecure.RSA.PrivateKey(pem: Self.testRSAPrivateKey)
         app.jwtKeys = await JWTKeyCollection().add(rsa: rsaKey, digestAlgorithm: .sha256)
 
-        try AuthModule.configure(app)
         try UserModule.configure(app)
+        try AuthModule.configure(app)
         try routes(app)
     }
 
