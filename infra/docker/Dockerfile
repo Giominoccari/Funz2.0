@@ -32,6 +32,7 @@ RUN export DEBIAN_FRONTEND=noninteractive \
     && apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
+        curl \
         libcurl4 \
         libxml2 \
         tzdata \
