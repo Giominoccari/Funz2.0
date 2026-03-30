@@ -588,7 +588,7 @@ def _download_dem_stitcher():
         # stitch_dem returns (numpy array, rasterio profile dict)
         X, p = stitch_dem(
             bounds,
-            dem_name="cop_dem",  # Copernicus GLO-30
+            dem_name="glo_30",  # Copernicus GLO-30
             dst_ellipsoidal_height=False,
             merge_nodata_value=0,
         )
