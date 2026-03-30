@@ -12,45 +12,64 @@
         body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; }
         #map { position: absolute; top: 0; bottom: 0; width: 100%; }
 
-        /* ── User location: pulsing blue dot ── */
-        .user-marker {
-            width: 18px; height: 18px; border-radius: 50%;
-            background: #4285F4;
-            border: 3px solid #fff;
-            box-shadow: 0 0 0 rgba(66,133,244,.4), 0 1px 4px rgba(0,0,0,.3);
-            animation: user-pulse 2s ease-out infinite;
-            will-change: box-shadow;
+        /* ── User location: forest-themed marker ── */
+        .user-marker-wrapper {
+            position: relative;
+            width: 36px; height: 36px;
+            display: flex; align-items: center; justify-content: center;
         }
-        @keyframes user-pulse {
-            0%   { box-shadow: 0 0 0 0 rgba(66,133,244,.45), 0 1px 4px rgba(0,0,0,.3); }
-            70%  { box-shadow: 0 0 0 14px rgba(66,133,244,0), 0 1px 4px rgba(0,0,0,.3); }
-            100% { box-shadow: 0 0 0 0 rgba(66,133,244,0), 0 1px 4px rgba(0,0,0,.3); }
+        .user-marker-ring {
+            position: absolute;
+            width: 36px; height: 36px; border-radius: 50%;
+            background: radial-gradient(circle, rgba(46,204,113,.25) 0%, rgba(46,204,113,0) 70%);
+            animation: user-ring-pulse 2.5s ease-out infinite;
+        }
+        .user-marker-dot {
+            position: relative; z-index: 1;
+            width: 14px; height: 14px; border-radius: 50%;
+            background: linear-gradient(135deg, #2ecc71 0%, #27ae60 100%);
+            border: 2.5px solid #fff;
+            box-shadow: 0 1px 6px rgba(0,0,0,.35);
+        }
+        .user-marker-arrow {
+            position: absolute; z-index: 2;
+            top: -2px; left: 50%; transform: translateX(-50%);
+            width: 0; height: 0;
+            border-left: 4px solid transparent;
+            border-right: 4px solid transparent;
+            border-bottom: 6px solid #fff;
+            filter: drop-shadow(0 -1px 2px rgba(0,0,0,.2));
+            display: none; /* shown when heading is available */
+        }
+        @keyframes user-ring-pulse {
+            0%   { transform: scale(0.6); opacity: 1; }
+            100% { transform: scale(1.4); opacity: 0; }
         }
 
         /* ── POI markers ── */
         .poi-marker {
             display: flex; align-items: center; justify-content: center;
-            width: 32px; height: 32px; border-radius: 50% 50% 50% 4px;
+            width: 22px; height: 22px; border-radius: 50% 50% 50% 3px;
             background: linear-gradient(135deg, #e74c3c 0%, #c0392b 100%);
-            border: 2.5px solid #fff;
-            box-shadow: 0 2px 8px rgba(0,0,0,.3), 0 0 0 1px rgba(0,0,0,.06);
+            border: 2px solid #fff;
+            box-shadow: 0 1px 5px rgba(0,0,0,.3), 0 0 0 1px rgba(0,0,0,.06);
             transform: rotate(-45deg);
             cursor: pointer;
             transition: transform .2s cubic-bezier(.34,1.56,.64,1), box-shadow .2s ease;
         }
         .poi-marker:hover {
             transform: rotate(-45deg) scale(1.15);
-            box-shadow: 0 4px 14px rgba(0,0,0,.35), 0 0 0 1px rgba(0,0,0,.08);
+            box-shadow: 0 3px 10px rgba(0,0,0,.35), 0 0 0 1px rgba(0,0,0,.08);
         }
         .poi-marker-inner {
             transform: rotate(45deg);
-            font-size: 13px; line-height: 1; color: #fff;
+            font-size: 10px; line-height: 1; color: #fff;
             text-shadow: 0 1px 2px rgba(0,0,0,.3);
         }
 
         /* ── POI label ── */
         .poi-label {
-            position: absolute; top: 36px; left: 50%;
+            position: absolute; top: 26px; left: 50%;
             transform: translateX(-50%);
             white-space: nowrap;
             font-size: 11px; font-weight: 600; color: #fff;
@@ -241,7 +260,7 @@
 
                 if (poi.name) {
                     marker.setPopup(
-                        new maplibregl.Popup({ offset: 18, closeButton: false })
+                        new maplibregl.Popup({ offset: 14, closeButton: false })
                             .setText(poi.name)
                     );
                 }
@@ -254,13 +273,25 @@
 
         function setUserLocation(lat, lon) {
             if (!userMarker) {
-                const el = document.createElement('div');
-                el.className = 'user-marker';
-                userMarker = new maplibregl.Marker({ element: el }).setLngLat([lon, lat]).addTo(map);
+                const wrapper = document.createElement('div');
+                wrapper.className = 'user-marker-wrapper';
+                const ring = document.createElement('div');
+                ring.className = 'user-marker-ring';
+                const dot = document.createElement('div');
+                dot.className = 'user-marker-dot';
+                wrapper.appendChild(ring);
+                wrapper.appendChild(dot);
+                userMarker = new maplibregl.Marker({ element: wrapper }).setLngLat([lon, lat]).addTo(map);
             } else {
                 userMarker.setLngLat([lon, lat]);
             }
         }
+
+        // Lightweight update — moves marker without flyTo (for continuous GPS updates)
+        window.updateUserMarker = function(lat, lon) {
+            if (typeof lat !== 'number' || typeof lon !== 'number') return;
+            setUserLocation(lat, lon);
+        };
 
         // ── Live track polyline ──
         let trackStartMarker = null;
