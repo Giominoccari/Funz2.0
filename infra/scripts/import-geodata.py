@@ -253,14 +253,31 @@ def _get_hda_client():
 
 
 def _hda_search_with_timeout(client, query, timeout=HDA_SEARCH_TIMEOUT):
-    """Run client.search() with a timeout to prevent infinite hangs."""
+    """Run client.search() with a timeout to prevent infinite hangs.
+
+    Passes limit=None to bypass the HDA client's default pagination cap
+    (100 items), ensuring all matching results are returned.
+    """
     with ThreadPoolExecutor(max_workers=1) as executor:
-        future = executor.submit(client.search, query)
+        future = executor.submit(client.search, query, limit=None)
         try:
-            return future.result(timeout=timeout)
+            matches = future.result(timeout=timeout)
+            total = getattr(matches, "total", None)
+            count = len(matches.results) if matches else 0
+            if total is not None and count < total:
+                print(f"  ⚠ WEkEO returned {count}/{total} results — pagination may be incomplete")
+            return matches
         except FuturesTimeout:
             print(f"  ✗ WEkEO search timed out after {timeout}s")
             return None
+        except TypeError:
+            # Older hda versions may not accept limit= kwarg — retry without it
+            future2 = executor.submit(client.search, query)
+            try:
+                return future2.result(timeout=timeout)
+            except Exception as e:
+                print(f"  ✗ WEkEO search failed: {e}")
+                return None
         except Exception as e:
             print(f"  ✗ WEkEO search failed: {e}")
             return None
@@ -539,12 +556,82 @@ def handle_dlt(client):
 # ─── Copernicus DEM GLO-30 ───────────────────────────────────────────
 
 
-def download_dem(client):
-    """Download Copernicus DEM GLO-30 tiles for Italy from WEkEO."""
+def _download_dem_stitcher():
+    """Download Copernicus DEM GLO-30 via dem-stitcher (AWS, no auth needed).
+
+    This is the preferred method: downloads directly from AWS Open Data,
+    no WEkEO auth, no pagination issues, guaranteed complete coverage.
+    Requires: pip install dem-stitcher
+    """
     raw = DATA_DIR / "copernicus_dem_italy_raw.tif"
     if file_ok(raw):
         print("  ✔ Raw DEM already present")
         return raw
+
+    try:
+        from dem_stitcher import stitch_dem
+    except ImportError:
+        print("  ⚠ dem-stitcher not installed (pip install dem-stitcher)")
+        return None
+
+    min_lon, min_lat, max_lon, max_lat = ITALY_BBOX
+    bounds = [min_lon, min_lat, max_lon, max_lat]
+
+    print("  ▶ Downloading DEM via dem-stitcher (Copernicus GLO-30 from AWS)...")
+    print(f"    bbox: {bounds}")
+    start = time.time()
+
+    try:
+        import numpy as np
+        import rasterio
+
+        # stitch_dem returns (numpy array, rasterio profile dict)
+        X, p = stitch_dem(
+            bounds,
+            dem_name="cop_dem",  # Copernicus GLO-30
+            dst_ellipsoidal_height=False,
+            merge_nodata_value=0,
+        )
+
+        # Write to GeoTIFF
+        p.update(driver="GTiff", dtype="float32", compress="deflate")
+        with rasterio.open(str(raw), "w", **p) as dst:
+            dst.write(X.astype(np.float32), 1)
+
+        elapsed = time.time() - start
+        if elapsed >= 60:
+            elapsed_str = f"{elapsed / 60:.1f}m"
+        else:
+            elapsed_str = f"{elapsed:.0f}s"
+
+        # Verify no large gaps
+        zero_pct = (X == 0).sum() / X.size * 100
+        if zero_pct > 30:
+            print(f"  ⚠ DEM has {zero_pct:.1f}% zero pixels (includes sea, but check for gaps)")
+
+        print(f"  ✔ DEM downloaded via dem-stitcher ({size_mb(raw):.0f} MB, {elapsed_str})")
+        return raw
+
+    except Exception as e:
+        print(f"  ✗ dem-stitcher failed: {e}")
+        raw.unlink(missing_ok=True)
+        return None
+
+
+def _download_dem_wekeo(client):
+    """Download Copernicus DEM GLO-30 tiles from WEkEO (fallback).
+
+    Known issue: WEkEO HDA pagination may return incomplete tile sets,
+    leaving gaps in the merged DEM. Prefer dem-stitcher when possible.
+    """
+    raw = DATA_DIR / "copernicus_dem_italy_raw.tif"
+    if file_ok(raw):
+        print("  ✔ Raw DEM already present")
+        return raw
+
+    if client is None:
+        print("  ✗ WEkEO fallback requires authentication")
+        return None
 
     # Check for already-downloaded WEkEO ZIP tiles
     tiles_dir = DATA_DIR / "dem_tiles"
@@ -571,6 +658,15 @@ def download_dem(client):
             for r in matches.results[:5]:
                 print(f"    Sample: {r.get('id', '')}")
         return None
+
+    # Italy bbox spans ~12° lon x ~11° lat → expect ~156 tiles (1°×1° each)
+    expected_tiles = (
+        (math.ceil(ITALY_BBOX[2]) - math.floor(ITALY_BBOX[0]))
+        * (math.ceil(ITALY_BBOX[3]) - math.floor(ITALY_BBOX[1]))
+    )
+    if len(dem_tiles) < expected_tiles * 0.95:
+        print(f"  ⚠ Only {len(dem_tiles)} tiles found, expected ~{expected_tiles} for Italy bbox")
+        print(f"    Missing tiles will create gaps — consider using dem-stitcher instead")
 
     print(f"  ▶ Downloading {len(dem_tiles)} GLO-30 tiles...")
     tiles_dir.mkdir(parents=True, exist_ok=True)
@@ -616,16 +712,18 @@ def _merge_dem_tiles(tiles_dir, output):
         print("  ✗ No TIF files found in DEM tiles")
         return None
 
-    print(f"  ▶ Merging {len(dem_tifs)} DEM tiles...")
+    print(f"  ▶ Merging {len(dem_tifs)} DEM tiles (using -n 0 to mark gaps as nodata)...")
     ok, _, err = run(
-        ["gdal_merge.py", "-o", str(output), "-q"] + [str(t) for t in dem_tifs],
+        ["gdal_merge.py", "-o", str(output), "-n", "0", "-a_nodata", "0",
+         "-q"] + [str(t) for t in dem_tifs],
         timeout=600,
     )
     if not ok:
         # Fallback
         ok, _, err = run(
             ["python3", "-m", "osgeo_utils.gdal_merge",
-             "-o", str(output), "-q"] + [str(t) for t in dem_tifs],
+             "-o", str(output), "-n", "0", "-a_nodata", "0",
+             "-q"] + [str(t) for t in dem_tifs],
             timeout=600,
         )
 
@@ -633,18 +731,35 @@ def _merge_dem_tiles(tiles_dir, output):
         print(f"  ✗ Merge failed: {err[:200] if err else 'unknown'}")
         return None
 
+    # Check for nodata gaps (zero-filled areas from missing tiles)
+    ok_info, info_out, _ = run(["gdalinfo", "-stats", str(output)], timeout=60)
+    if ok_info and "STATISTICS_MINIMUM=0" in info_out:
+        print("  ⚠ Merged DEM contains 0-value pixels — likely gaps from missing tiles")
+        print("    Consider using dem-stitcher instead: pip install dem-stitcher")
+
     print(f"  ✔ DEM tiles merged ({size_mb(output):.0f} MB)")
     return output
 
 
 def handle_dem(client):
-    """Download + clip Copernicus DEM to Italy."""
+    """Download + clip Copernicus DEM to Italy.
+
+    Strategy: try dem-stitcher first (reliable, no auth needed),
+    fall back to WEkEO HDA if dem-stitcher is not available.
+    """
     final = DATA_DIR / "copernicus_dem_italy.tif"
     if file_ok(final):
         print("  ✔ Already processed")
         return final
 
-    raw = download_dem(client)
+    # Strategy 1: dem-stitcher (preferred — complete coverage guaranteed)
+    raw = _download_dem_stitcher()
+
+    # Strategy 2: WEkEO HDA (fallback — may have pagination gaps)
+    if not raw:
+        print("  ▶ Falling back to WEkEO HDA download...")
+        raw = _download_dem_wekeo(client)
+
     if not raw:
         return None
 
@@ -843,9 +958,9 @@ def main():
     # Preserve execution order
     targets = [d for d in DATASET_ORDER if d in targets]
 
-    # Authenticate with WEkEO (only if needed)
+    # Authenticate with WEkEO (only if needed — dem prefers dem-stitcher)
     needs_wekeo = any(
-        t in ("corine", "tcd", "dlt", "dem") for t in targets
+        t in ("corine", "tcd", "dlt") for t in targets
     )
     client = None
     if needs_wekeo:
@@ -858,7 +973,7 @@ def main():
             # Check if any critical WEkEO datasets are targeted
             wekeo_critical = [
                 t for t in targets
-                if t in ("corine", "dem") and DATASETS[t]["critical"]
+                if t in ("corine",) and DATASETS[t]["critical"]
             ]
             if wekeo_critical:
                 sys.exit(1)
@@ -874,7 +989,7 @@ def main():
         print(f"▶ {ds['label']}")
 
         # Skip WEkEO datasets if not authenticated
-        if name in ("corine", "tcd", "dlt", "dem") and client is None:
+        if name in ("corine", "tcd", "dlt") and client is None:
             # Check if raw file already exists
             raw_files = {
                 "corine": DATA_DIR / "corine_italy.tif",

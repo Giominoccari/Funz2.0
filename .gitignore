@@ -68,6 +68,7 @@ fastlane/test_output
 Keys/*
 data/geodata/
 Storage/tiles
+.cache/
 .venv/
 .env
 .env.*

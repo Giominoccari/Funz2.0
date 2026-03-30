@@ -24,12 +24,18 @@
         const authToken = params.get('token') || '';
 
         let currentDate = params.get('date') || new Date().toISOString().slice(0, 10);
-        let currentOpacity = 0.7;
-        let heatThreshold = 20;
+        let currentOpacity = 1;
+        let heatThreshold = 90;
         let heatShowAll = false;
 
-        // ── Tile URL builder (uses auth tiles if token present, dev-tiles otherwise) ──
-        function tileURLTemplate(date) {
+        // ── Tile URL builder ──
+        // Uses dynamic tiles (server-side threshold filtering) when min_score > 0,
+        // falls back to pre-rendered static tiles otherwise.
+        function tileURLTemplate(date, minScore) {
+            const score = minScore || 0;
+            if (score > 0) {
+                return `/map/dynamic-tiles/${date}/{z}/{x}/{y}?min_score=${score.toFixed(2)}`;
+            }
             if (authToken) {
                 return window.location.origin + `/map/tiles/${date}/{z}/{x}/{y}`;
             }
@@ -42,28 +48,44 @@
             style: {
                 version: 8,
                 sources: {
-                    'osm': {
+                    'esri-satellite': {
+                        type: 'raster',
+                        tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
+                        tileSize: 256,
+                        maxzoom: 18,
+                        attribution: '&copy; Esri, Maxar, Earthstar Geographics'
+                    },
+                    'osm-labels': {
                         type: 'raster',
                         tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
                         tileSize: 256,
-                        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+                        maxzoom: 19,
+                        attribution: '&copy; OpenStreetMap contributors'
                     }
                 },
-                layers: [{
-                    id: 'osm-layer',
-                    type: 'raster',
-                    source: 'osm',
-                    minzoom: 0,
-                    maxzoom: 19
-                }]
+                layers: [
+                    {
+                        id: 'esri-satellite-layer',
+                        type: 'raster',
+                        source: 'esri-satellite',
+                        minzoom: 0,
+                        maxzoom: 18
+                    },
+                    {
+                        id: 'osm-labels-layer',
+                        type: 'raster',
+                        source: 'osm-labels',
+                        minzoom: 0,
+                        maxzoom: 19,
+                        paint: { 'raster-opacity': 0.4 }
+                    }
+                ]
             },
             center: [initLon, initLat],
             zoom: initZoom,
             minZoom: 6,
             maxZoom: 12
         });
-
-        map.addControl(new maplibregl.NavigationControl(), 'top-right');
 
         // ── If using auth token, add it to tile requests via transformRequest ──
         if (authToken) {
@@ -78,7 +100,7 @@
         }
 
         // ── Funghi overlay ──
-        function loadOverlay(date) {
+        function loadOverlay(date, minScore) {
             const sourceId = 'funghi-tiles';
             const layerId = 'funghi-layer';
 
@@ -89,7 +111,7 @@
 
             map.addSource(sourceId, {
                 type: 'raster',
-                tiles: [tileURLTemplate(date)],
+                tiles: [tileURLTemplate(date, minScore)],
                 tileSize: 256,
                 minzoom: 6,
                 maxzoom: 12
@@ -221,9 +243,9 @@
             if (typeof opts.threshold === 'number') heatThreshold = opts.threshold;
             if (typeof opts.all === 'boolean') heatShowAll = opts.all;
 
-            // Adjust overlay opacity based on threshold (higher threshold = more transparent)
-            const opacity = heatShowAll ? 0.85 : Math.max(0.3, 1.0 - (heatThreshold / 100) * 0.7);
-            setOpacity(opacity);
+            // Convert threshold (0-100) to score (0.0-1.0) and reload tiles
+            const minScore = heatShowAll ? 0 : heatThreshold / 100;
+            loadOverlay(currentDate, minScore);
         };
 
         // Called by MapBridge.pushPOIs(_:) via window.postMessage

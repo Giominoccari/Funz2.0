@@ -5,6 +5,22 @@ import Testing
 @Suite("CachedWeatherClient Tests")
 struct CachedWeatherClientTests {
 
+    /// Helper: 14 daily observations that aggregate to known values.
+    static func makeDailyObs(
+        dailyRain: Double = 3.0,
+        temp: Double = 18.0,
+        humidity: Double = 75.0
+    ) -> [DailyObservation] {
+        (0..<14).map { i in
+            DailyObservation(
+                date: "2026-03-\(String(format: "%02d", 1 + i))",
+                rainMm: dailyRain,
+                tempMeanC: temp,
+                humidityPct: humidity
+            )
+        }
+    }
+
     @Test("returns cached data on cache hit")
     func cacheHit() async throws {
         let cachedData = WeatherData(rain14d: 42.0, avgTemperature: 18.0, avgHumidity: 75.0)
@@ -12,31 +28,32 @@ struct CachedWeatherClientTests {
         let key = "weather:46.07:11.12:2026-03-14"
         try await cache.set(key: key, value: cachedData, ttl: 3600)
 
-        let spy = SpyWeatherClient(result: WeatherData(rain14d: 0, avgTemperature: 0, avgHumidity: 0))
+        let spy = SpyWeatherClient(dailyResult: Self.makeDailyObs())
         let client = CachedWeatherClient(inner: spy, cache: cache, ttl: 3600, targetDate: "2026-03-14")
 
         let result = try await client.fetch(latitude: 46.07, longitude: 11.12)
         #expect(result.rain14d == 42.0)
-        #expect(spy.fetchCount == 0)
+        #expect(spy.fetchDailyCount == 0)
     }
 
     @Test("calls inner client on cache miss and stores result")
     func cacheMiss() async throws {
-        let expected = WeatherData(rain14d: 55.0, avgTemperature: 20.0, avgHumidity: 80.0)
+        let dailyObs = Self.makeDailyObs(dailyRain: 55.0 / 14.0, temp: 20.0, humidity: 80.0)
         let cache = MockWeatherCache()
-        let spy = SpyWeatherClient(result: expected)
+        let spy = SpyWeatherClient(dailyResult: dailyObs)
         let client = CachedWeatherClient(inner: spy, cache: cache, ttl: 3600, targetDate: "2026-03-14")
 
         let result = try await client.fetch(latitude: 46.07, longitude: 11.12)
-        #expect(result.rain14d == 55.0)
-        #expect(spy.fetchCount == 1)
+        let expectedRain = (55.0 / 14.0) * 14.0
+        #expect(abs(result.rain14d - expectedRain) < 0.001)
+        #expect(spy.fetchDailyCount == 1)
         #expect(cache.setCallCount == 1)
     }
 
     @Test("cache key uses rounded coordinates")
     func roundedCoordinates() async throws {
         let cache = MockWeatherCache()
-        let spy = SpyWeatherClient(result: WeatherData(rain14d: 10, avgTemperature: 15, avgHumidity: 60))
+        let spy = SpyWeatherClient(dailyResult: Self.makeDailyObs())
         let client = CachedWeatherClient(inner: spy, cache: cache, ttl: 3600, targetDate: "2026-03-14")
 
         // Slightly different coordinates that round to the same value
@@ -44,13 +61,13 @@ struct CachedWeatherClientTests {
         _ = try await client.fetch(latitude: 46.0701, longitude: 11.1202)
 
         // Second call should hit cache because rounded coords match
-        #expect(spy.fetchCount == 1)
+        #expect(spy.fetchDailyCount == 1)
     }
 
     @Test("cache key includes date")
     func dateInKey() async throws {
         let cache = MockWeatherCache()
-        let spy = SpyWeatherClient(result: WeatherData(rain14d: 10, avgTemperature: 15, avgHumidity: 60))
+        let spy = SpyWeatherClient(dailyResult: Self.makeDailyObs())
 
         let client1 = CachedWeatherClient(inner: spy, cache: cache, ttl: 3600, targetDate: "2026-03-14")
         _ = try await client1.fetch(latitude: 46.07, longitude: 11.12)
@@ -59,7 +76,7 @@ struct CachedWeatherClientTests {
         _ = try await client2.fetch(latitude: 46.07, longitude: 11.12)
 
         // Different dates → different cache keys → 2 inner fetches
-        #expect(spy.fetchCount == 2)
+        #expect(spy.fetchDailyCount == 2)
     }
 }
 
@@ -90,13 +107,13 @@ final class MockWeatherCache: WeatherCache, @unchecked Sendable {
 final class SpyWeatherClient: WeatherClient, @unchecked Sendable {
     // @unchecked Sendable: test-only spy with lock-protected mutable state
     private let lock = NSLock()
-    private(set) var fetchCount = 0
-    let result: WeatherData
+    private(set) var fetchDailyCount = 0
+    let dailyResult: [DailyObservation]
 
-    init(result: WeatherData) { self.result = result }
+    init(dailyResult: [DailyObservation]) { self.dailyResult = dailyResult }
 
-    func fetch(latitude: Double, longitude: Double) async throws -> WeatherData {
-        lock.withLock { fetchCount += 1 }
-        return result
+    func fetchDaily(latitude: Double, longitude: Double) async throws -> [DailyObservation] {
+        lock.withLock { fetchDailyCount += 1 }
+        return dailyResult
     }
 }

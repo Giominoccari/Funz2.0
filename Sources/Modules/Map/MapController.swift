@@ -1,5 +1,6 @@
 import Foundation
 import Logging
+import PNG
 import SotoS3
 import Vapor
 
@@ -13,6 +14,8 @@ struct MapController: RouteCollection, Sendable {
         protectedMap.get("tiles", ":date", ":z", ":x", ":y", use: getTile)
         // Dev-only: unauthenticated tile access (local files only, no S3)
         map.get("dev-tiles", ":date", ":z", ":x", ":y", use: getDevTile)
+        // Dynamic tiles: on-the-fly rendering with min_score threshold
+        map.get("dynamic-tiles", ":date", ":z", ":x", ":y", use: getDynamicTile)
         // Dates listing remains public
         map.get("dates", use: getDates)
     }
@@ -89,6 +92,71 @@ struct MapController: RouteCollection, Sendable {
             throw Abort(.notFound)
         }
         return try await req.fileio.asyncStreamFile(at: localPath)
+    }
+
+    // MARK: - GET /map/dynamic-tiles/:date/:z/:x/:y?min_score=0.X
+
+    @Sendable
+    func getDynamicTile(req: Request) async throws -> Response {
+        guard req.application.environment != .production else {
+            throw Abort(.notFound)
+        }
+        guard let date = req.parameters.get("date"),
+              let zStr = req.parameters.get("z"), let z = Int(zStr),
+              let xStr = req.parameters.get("x"), let x = Int(xStr),
+              let yStr = req.parameters.get("y"), let y = Int(yStr)
+        else {
+            throw Abort(.badRequest, reason: "Invalid tile parameters")
+        }
+        guard (6...12).contains(z) else {
+            throw Abort(.badRequest, reason: "Zoom must be between 6 and 12")
+        }
+
+        let minScore = Double(req.query[String.self, at: "min_score"] ?? "0") ?? 0
+
+        let basePath = req.application.directory.workingDirectory + "Storage/tiles"
+        guard let cached = await RasterCache.shared.get(date: date, basePath: basePath) else {
+            throw Abort(.notFound, reason: "Score raster not found for \(date)")
+        }
+        let raster = cached.raster
+        let scoreRange = cached.scoreRange
+
+        let size = TileMath.tileSize
+        var pixels = [PNG.RGBA<UInt8>](repeating: .init(0, 0, 0, 0), count: size * size)
+        var hasData = false
+
+        for py in 0..<size {
+            for px in 0..<size {
+                let (lat, lon) = TileMath.pixelToLatLon(
+                    pixelX: px, pixelY: py,
+                    tileX: x, tileY: y, zoom: z
+                )
+                if let score = raster.sample(latitude: lat, longitude: lon),
+                   score >= minScore {
+                    let color = Colormap.color(for: score, scoreRange: scoreRange)
+                    pixels[py * size + px] = .init(color.r, color.g, color.b, color.a)
+                    if color.a > 0 { hasData = true }
+                }
+            }
+        }
+
+        guard hasData else {
+            // Return 1x1 transparent PNG for empty tiles
+            throw Abort(.noContent)
+        }
+
+        let image = PNG.Image(
+            packing: pixels,
+            size: (x: size, y: size),
+            layout: .init(format: .rgba8(palette: [], fill: nil))
+        )
+        var pngData: [UInt8] = []
+        try image.compress(stream: &pngData, level: 1)
+
+        var headers = HTTPHeaders()
+        headers.add(name: .contentType, value: "image/png")
+        headers.add(name: .cacheControl, value: "public, max-age=300")
+        return Response(status: .ok, headers: headers, body: .init(data: Data(pngData)))
     }
 
     // MARK: - GET /map/dates

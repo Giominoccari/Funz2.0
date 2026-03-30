@@ -79,7 +79,7 @@ struct TileGeneratorTests {
     // MARK: - TileGenerator
 
     @Test("generateAll produces tiles for small result set")
-    func generateAllProducesTiles() {
+    func generateAllProducesTiles() async {
         // Create a small grid of scored points covering Trentino
         var results: [ScoringEngine.Result] = []
         for lat in stride(from: 45.8, through: 46.5, by: 0.05) {
@@ -90,13 +90,13 @@ struct TileGeneratorTests {
         }
 
         let gen = TileGenerator(tileZoomMin: 6, tileZoomMax: 8)
-        let tiles = gen.generateAll(results: results, bbox: .trentino)
+        let tiles = await gen.generateAll(results: results, bbox: .trentino)
 
         #expect(tiles.count > 0)
     }
 
     @Test("Generated tile has valid PNG header")
-    func tileHasValidPNG() {
+    func tileHasValidPNG() async {
         var results: [ScoringEngine.Result] = []
         for lat in stride(from: 45.8, through: 46.5, by: 0.05) {
             for lon in stride(from: 10.8, through: 11.8, by: 0.05) {
@@ -105,7 +105,7 @@ struct TileGeneratorTests {
         }
 
         let gen = TileGenerator(tileZoomMin: 8, tileZoomMax: 8)
-        let tiles = gen.generateAll(results: results, bbox: .trentino)
+        let tiles = await gen.generateAll(results: results, bbox: .trentino)
 
         guard let firstTile = tiles.first else {
             Issue.record("No tiles generated")
@@ -121,7 +121,7 @@ struct TileGeneratorTests {
     }
 
     @Test("Generated tile PNG contains IHDR with 256x256")
-    func tileIs256x256() {
+    func tileIs256x256() async {
         var results: [ScoringEngine.Result] = []
         for lat in stride(from: 45.8, through: 46.5, by: 0.05) {
             for lon in stride(from: 10.8, through: 11.8, by: 0.05) {
@@ -130,7 +130,7 @@ struct TileGeneratorTests {
         }
 
         let gen = TileGenerator(tileZoomMin: 8, tileZoomMax: 8)
-        let tiles = gen.generateAll(results: results, bbox: .trentino)
+        let tiles = await gen.generateAll(results: results, bbox: .trentino)
 
         guard let tile = tiles.first, tile.pngData.count > 24 else {
             Issue.record("No tiles or too small")

@@ -15,12 +15,17 @@ struct TileGenerator: Sendable {
     let tileZoomMin: Int
     let tileZoomMax: Int
 
+    struct Output: Sendable {
+        let tiles: [GeneratedTile]
+        let raster: ScoreRaster
+    }
+
     func generateAll(
         results: [ScoringEngine.Result],
         bbox: BoundingBox
-    ) -> [GeneratedTile] {
+    ) async -> Output {
         let phaseStart = ContinuousClock.now
-        let interpolator = IDWInterpolator(results: results)
+        let raster = ScoreRaster(results: results, bbox: bbox)
 
         // Compute actual score range for dynamic colormap stretching
         let scores = results.map(\.score).filter { $0 > 0.001 }
@@ -31,44 +36,59 @@ struct TileGenerator: Sendable {
         Self.logger.info("Score range for colormap", metadata: [
             "min": "\(scoreRange?.min ?? 0)",
             "max": "\(scoreRange?.max ?? 0)",
-            "nonZeroPoints": "\(scores.count)"
+            "nonZeroPoints": "\(scores.count)",
+            "rasterSize": "\(raster.width)x\(raster.height)"
         ])
 
-        var tiles: [GeneratedTile] = []
+        var allTiles: [GeneratedTile] = []
 
         for zoom in tileZoomMin...tileZoomMax {
             let zoomStart = ContinuousClock.now
             let tileCoords = TileMath.tilesForBBox(bbox, zoom: zoom)
 
-            for coord in tileCoords {
-                if let tile = renderTile(coord: coord, interpolator: interpolator, scoreRange: scoreRange) {
-                    tiles.append(tile)
+            // Render tiles concurrently within each zoom level
+            let zoomTiles = await withTaskGroup(
+                of: GeneratedTile?.self,
+                returning: [GeneratedTile].self
+            ) { group in
+                for coord in tileCoords {
+                    group.addTask {
+                        renderTile(coord: coord, raster: raster, scoreRange: scoreRange)
+                    }
                 }
+
+                var tiles: [GeneratedTile] = []
+                tiles.reserveCapacity(tileCoords.count)
+                for await tile in group {
+                    if let tile { tiles.append(tile) }
+                }
+                return tiles
             }
 
+            allTiles.append(contentsOf: zoomTiles)
+
             Self.logger.info("Zoom \(zoom) complete", metadata: [
-                "tiles": "\(tileCoords.count)",
+                "tiles": "\(zoomTiles.count)/\(tileCoords.count)",
                 "duration": "\(ContinuousClock.now - zoomStart)"
             ])
         }
 
         Self.logger.info("Tile generation complete", metadata: [
-            "totalTiles": "\(tiles.count)",
+            "totalTiles": "\(allTiles.count)",
             "zoomRange": "\(tileZoomMin)-\(tileZoomMax)",
             "duration": "\(ContinuousClock.now - phaseStart)"
         ])
 
-        return tiles
+        return Output(tiles: allTiles, raster: raster)
     }
 
     private func renderTile(
         coord: TileMath.TileCoord,
-        interpolator: IDWInterpolator,
+        raster: ScoreRaster,
         scoreRange: (min: Double, max: Double)?
     ) -> GeneratedTile? {
         let size = TileMath.tileSize
-        var pixels: [PNG.RGBA<UInt8>] = []
-        pixels.reserveCapacity(size * size)
+        var pixels = [PNG.RGBA<UInt8>](repeating: .init(0, 0, 0, 0), count: size * size)
         var hasData = false
 
         for py in 0..<size {
@@ -78,12 +98,10 @@ struct TileGenerator: Sendable {
                     tileX: coord.x, tileY: coord.y, zoom: coord.z
                 )
 
-                if let score = interpolator.interpolate(latitude: lat, longitude: lon) {
+                if let score = raster.sample(latitude: lat, longitude: lon) {
                     let color = Colormap.color(for: score, scoreRange: scoreRange)
-                    pixels.append(.init(color.r, color.g, color.b, color.a))
+                    pixels[py * size + px] = .init(color.r, color.g, color.b, color.a)
                     if color.a > 0 { hasData = true }
-                } else {
-                    pixels.append(.init(0, 0, 0, 0))
                 }
             }
         }
@@ -107,7 +125,9 @@ struct TileGenerator: Sendable {
 
         var data: [UInt8] = []
         do {
-            try image.compress(stream: &data, level: 6)
+            // Level 1 (fast) instead of 6 (default) — tiles are small overlay PNGs,
+            // compression savings at level 6 are negligible vs. the CPU cost
+            try image.compress(stream: &data, level: 1)
             return data
         } catch {
             return nil

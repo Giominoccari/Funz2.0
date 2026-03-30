@@ -35,12 +35,9 @@ struct AdminController: RouteCollection, Sendable {
             targetDate: date
         )
 
-        // Forest/soil + altitude clients: PostGIS raster
+        // Batched geo enrichment: single SQL query per batch for all raster data
         let sqlDb = req.db as! any SQLDatabase
-        let forestClient = PostGISForestClient(db: sqlDb)
-
-        // Altitude client: PostGIS raster (Copernicus DEM)
-        let altitudeClient = PostGISAltitudeClient(db: sqlDb)
+        let geoClient = BatchGeoEnrichmentClient(db: sqlDb)
 
         Self.logger.info("Pipeline triggered", metadata: [
             "date": "\(date)",
@@ -52,8 +49,7 @@ struct AdminController: RouteCollection, Sendable {
                 let runner = PipelineRunner(
                     config: config.pipeline,
                     weatherClient: weatherClient,
-                    forestClient: forestClient,
-                    altitudeClient: altitudeClient
+                    geoEnrichmentClient: geoClient
                 )
                 try await runner.runFull(bbox: bbox, date: date)
                 Self.logger.info("Pipeline run completed", metadata: ["date": "\(date)"])

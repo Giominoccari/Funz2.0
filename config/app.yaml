@@ -5,6 +5,7 @@ server:
 pipeline:
   gridSpacingMeters: 500
   batchSize: 5000
+  geoBatchSize: 1500
   tileZoomMin: 6
   tileZoomMax: 12
   scoringWeights:
@@ -19,10 +20,12 @@ pipeline:
     humidityMultiplierMin: 0.4
   weather:
     baseURL: "https://archive-api.open-meteo.com/v1/archive"
-    maxConcurrentRequests: 10
-    retryMaxAttempts: 5
-    retryBaseDelayMs: 500
+    maxConcurrentRequests: 2
+    retryMaxAttempts: 10
+    retryBaseDelayMs: 2000
     cacheTTLSeconds: 86400
+    rateLimitPerSecond: 5
+    rateLimitBurst: 2
 
 map:
   tileSignedUrlTtlSeconds: 3600

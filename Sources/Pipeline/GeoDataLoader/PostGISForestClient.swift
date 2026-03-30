@@ -47,13 +47,20 @@ struct PostGISForestClient: ForestCoverageClient {
         return Self.mapESDACSoilType(soilCode)
     }
 
-    /// Maps CORINE Land Cover (CLC) classification codes to ForestType
+    /// Maps CORINE Land Cover (CLC) classification codes to ForestType.
+    /// Supports both original CLC Level 3 codes (111-523) and reclassified
+    /// sequential codes (1-44) as stored in the imported raster.
     /// Reference: https://land.copernicus.eu/en/products/corine-land-cover
     static func mapCORINEToForestType(_ code: Int) -> ForestType {
         switch code {
+        // Original CLC Level 3 codes
         case 311: return .broadleaf
         case 312: return .coniferous
         case 313: return .mixed
+        // Reclassified sequential codes (1-44)
+        case 23: return .broadleaf   // = CLC 311
+        case 24: return .coniferous  // = CLC 312
+        case 25: return .mixed       // = CLC 313
         default: return .none
         }
     }

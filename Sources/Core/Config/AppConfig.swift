@@ -23,10 +23,14 @@ struct ServerConfig: Codable, Sendable {
 struct PipelineConfig: Codable, Sendable {
     let gridSpacingMeters: Int
     let batchSize: Int
+    let geoBatchSize: Int?
     let tileZoomMin: Int
-    let tileZoomMax: Int
+    var tileZoomMax: Int
     let scoringWeights: ScoringWeights
     let weather: WeatherConfig
+
+    /// SQL batch size for geo enrichment (default 300)
+    var resolvedGeoBatchSize: Int { geoBatchSize ?? 300 }
 }
 
 struct WeatherConfig: Codable, Sendable {
@@ -35,6 +39,8 @@ struct WeatherConfig: Codable, Sendable {
     let retryMaxAttempts: Int
     let retryBaseDelayMs: Int
     let cacheTTLSeconds: Int
+    let rateLimitPerSecond: Int?
+    let rateLimitBurst: Int?
 }
 
 struct ScoringWeights: Codable, Sendable {

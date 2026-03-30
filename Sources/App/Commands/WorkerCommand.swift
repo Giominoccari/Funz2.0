@@ -12,6 +12,12 @@ struct WorkerCommand: AsyncCommand {
 
         @Option(name: "date", help: "Target date YYYY-MM-DD (default: today Rome timezone)")
         var date: String?
+
+        @Option(name: "max-zoom", help: "Override max tile zoom level (default: from config)")
+        var maxZoom: Int?
+
+        @Flag(name: "mock-weather", help: "Use mock weather data instead of Open-Meteo API")
+        var mockWeather: Bool
     }
 
     var help: String {
@@ -32,39 +38,61 @@ struct WorkerCommand: AsyncCommand {
         ])
 
         let config = try ConfigLoader.load()
-        let httpClient = app.http.client.shared
+        let sqlDb = app.db as! any SQLDatabase
 
-        // Verify Redis connectivity before pipeline
-        do {
-            let pong = try await app.redis.ping().get()
-            logger.info("Redis connected", metadata: ["ping": "\(pong)"])
-        } catch {
-            logger.warning("Redis not reachable, running without cache", metadata: ["error": "\(error)"])
+        let weatherClient: any WeatherClient
+        if signature.mockWeather {
+            logger.info("Using mock weather data (--mock-weather flag)")
+            weatherClient = MockWeatherClient(bbox: bbox)
+        } else {
+            let httpClient = app.http.client.shared
+
+            // Verify Redis connectivity before pipeline
+            do {
+                let pong = try await app.redis.ping().get()
+                logger.info("Redis connected", metadata: ["ping": "\(pong)"])
+            } catch {
+                logger.warning("Redis not reachable, running without cache", metadata: ["error": "\(error)"])
+            }
+
+            let redis = RedisWeatherCache(redis: app.redis)
+            let weatherRepo = WeatherRepository(db: sqlDb)
+
+            let openMeteo = OpenMeteoClient(
+                httpClient: httpClient,
+                targetDate: date,
+                config: config.pipeline.weather
+            )
+
+            // Ensure partitions exist for the full 14-day observation window
+            do {
+                try await weatherRepo.ensurePartitions(from: openMeteo.startDate, to: date)
+            } catch {
+                logger.warning("Failed to create weather partitions", metadata: [
+                    "error": "\(String(reflecting: error))"
+                ])
+            }
+            weatherClient = CachedWeatherClient(
+                inner: openMeteo,
+                cache: redis,
+                ttl: config.pipeline.weather.cacheTTLSeconds,
+                targetDate: date,
+                repository: weatherRepo
+            )
         }
 
-        let redis = RedisWeatherCache(redis: app.redis)
+        var pipelineConfig = config.pipeline
+        if let maxZoom = signature.maxZoom {
+            logger.info("Overriding max zoom", metadata: ["maxZoom": "\(maxZoom)"])
+            pipelineConfig.tileZoomMax = maxZoom
+        }
 
-        let openMeteo = OpenMeteoClient(
-            httpClient: httpClient,
-            targetDate: date,
-            config: config.pipeline.weather
-        )
-        let weatherClient = CachedWeatherClient(
-            inner: openMeteo,
-            cache: redis,
-            ttl: config.pipeline.weather.cacheTTLSeconds,
-            targetDate: date
-        )
-
-        let sqlDb = app.db as! any SQLDatabase
-        let forestClient = PostGISForestClient(db: sqlDb)
-        let altitudeClient = PostGISAltitudeClient(db: sqlDb)
+        let geoClient = BatchGeoEnrichmentClient(db: sqlDb)
 
         let runner = PipelineRunner(
-            config: config.pipeline,
+            config: pipelineConfig,
             weatherClient: weatherClient,
-            forestClient: forestClient,
-            altitudeClient: altitudeClient,
+            geoEnrichmentClient: geoClient,
             tileUploader: LocalTileUploader()
         )
 

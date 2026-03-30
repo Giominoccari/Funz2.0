@@ -21,12 +21,29 @@ struct PostGISForestClientTests {
         #expect(PostGISForestClient.mapCORINEToForestType(313) == .mixed)
     }
 
+    @Test("Reclassified CORINE code 23 maps to broadleaf")
+    func corine23() {
+        #expect(PostGISForestClient.mapCORINEToForestType(23) == .broadleaf)
+    }
+
+    @Test("Reclassified CORINE code 24 maps to coniferous")
+    func corine24() {
+        #expect(PostGISForestClient.mapCORINEToForestType(24) == .coniferous)
+    }
+
+    @Test("Reclassified CORINE code 25 maps to mixed")
+    func corine25() {
+        #expect(PostGISForestClient.mapCORINEToForestType(25) == .mixed)
+    }
+
     @Test("CORINE non-forest codes map to none")
     func corineNonForest() {
         #expect(PostGISForestClient.mapCORINEToForestType(111) == .none)
         #expect(PostGISForestClient.mapCORINEToForestType(211) == .none)
         #expect(PostGISForestClient.mapCORINEToForestType(512) == .none)
         #expect(PostGISForestClient.mapCORINEToForestType(0) == .none)
+        #expect(PostGISForestClient.mapCORINEToForestType(1) == .none)  // urban
+        #expect(PostGISForestClient.mapCORINEToForestType(44) == .none) // sea
     }
 
     // MARK: - ESDAC → SoilType mapping

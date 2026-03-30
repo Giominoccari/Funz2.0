@@ -5,22 +5,23 @@ import Testing
 @Suite("OpenMeteoClient Tests")
 struct OpenMeteoClientTests {
 
-    @Test("parseResponse decodes valid JSON correctly")
+    @Test("parseDailyResponse decodes valid JSON into daily observations")
     func parseValidJSON() throws {
         let json = Self.makeJSON(
             rainSum: [1.0, 2.0, 3.0, 0.5, 1.5, 2.5, 0.0, 1.0, 2.0, 3.0, 0.5, 1.5, 2.5, 0.0],
             temperature: [10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0, 18.0, 19.0, 20.0, 21.0, 22.0, 23.0],
             humidity: [60.0, 62.0, 64.0, 66.0, 68.0, 70.0, 72.0, 74.0, 76.0, 78.0, 80.0, 82.0, 84.0, 86.0]
         )
-        let data = Data(json.utf8)
-        let result = try OpenMeteoClient.parseResponse(data, latitude: 46.0, longitude: 11.0)
+        let observations = try OpenMeteoClient.parseDailyResponse(Data(json.utf8), latitude: 46.0, longitude: 11.0)
 
-        #expect(result.rain14d == 21.0)
-        #expect(result.avgTemperature > 0)
-        #expect(result.avgHumidity > 0)
+        #expect(observations.count == 14)
+        #expect(observations[0].date == "2026-03-01")
+        #expect(observations[0].rainMm == 1.0)
+        #expect(observations[0].tempMeanC == 10.0)
+        #expect(observations[0].humidityPct == 60.0)
     }
 
-    @Test("parseResponse computes rain14d as sum of all rain values")
+    @Test("aggregate computes rain14d as sum of all rain values")
     func rain14dSum() throws {
         let rainValues = [5.0, 0.0, 3.0, 2.0, 1.0, 0.0, 4.0, 6.0, 0.0, 1.0, 2.0, 3.0, 0.0, 1.0]
         let json = Self.makeJSON(
@@ -28,12 +29,13 @@ struct OpenMeteoClientTests {
             temperature: Array(repeating: 18.0, count: 14),
             humidity: Array(repeating: 70.0, count: 14)
         )
-        let result = try OpenMeteoClient.parseResponse(Data(json.utf8), latitude: 46.0, longitude: 11.0)
+        let observations = try OpenMeteoClient.parseDailyResponse(Data(json.utf8), latitude: 46.0, longitude: 11.0)
+        let result = WeatherData.aggregate(from: observations)
         let expectedSum = rainValues.reduce(0, +)
         #expect(result.rain14d == expectedSum)
     }
 
-    @Test("parseResponse computes avgTemperature from last 7 days only")
+    @Test("aggregate computes avgTemperature from last 7 days only")
     func avgTempLast7() throws {
         var temps = Array(repeating: 0.0, count: 7)
         temps.append(contentsOf: [10.0, 12.0, 14.0, 16.0, 18.0, 20.0, 22.0])
@@ -42,12 +44,13 @@ struct OpenMeteoClientTests {
             temperature: temps,
             humidity: Array(repeating: 70.0, count: 14)
         )
-        let result = try OpenMeteoClient.parseResponse(Data(json.utf8), latitude: 46.0, longitude: 11.0)
+        let observations = try OpenMeteoClient.parseDailyResponse(Data(json.utf8), latitude: 46.0, longitude: 11.0)
+        let result = WeatherData.aggregate(from: observations)
         let expectedAvg = (10.0 + 12.0 + 14.0 + 16.0 + 18.0 + 20.0 + 22.0) / 7.0
         #expect(abs(result.avgTemperature - expectedAvg) < 0.001)
     }
 
-    @Test("parseResponse computes avgHumidity from last 7 days only")
+    @Test("aggregate computes avgHumidity from last 7 days only")
     func avgHumidityLast7() throws {
         var humidity = Array(repeating: 0.0, count: 7)
         humidity.append(contentsOf: [60.0, 65.0, 70.0, 75.0, 80.0, 85.0, 90.0])
@@ -56,12 +59,13 @@ struct OpenMeteoClientTests {
             temperature: Array(repeating: 18.0, count: 14),
             humidity: humidity
         )
-        let result = try OpenMeteoClient.parseResponse(Data(json.utf8), latitude: 46.0, longitude: 11.0)
+        let observations = try OpenMeteoClient.parseDailyResponse(Data(json.utf8), latitude: 46.0, longitude: 11.0)
+        let result = WeatherData.aggregate(from: observations)
         let expectedAvg = (60.0 + 65.0 + 70.0 + 75.0 + 80.0 + 85.0 + 90.0) / 7.0
         #expect(abs(result.avgHumidity - expectedAvg) < 0.001)
     }
 
-    @Test("parseResponse handles null values in daily arrays")
+    @Test("parseDailyResponse handles null values as zero")
     func handleNulls() throws {
         let json = """
         {
@@ -73,13 +77,15 @@ struct OpenMeteoClientTests {
           }
         }
         """
-        let result = try OpenMeteoClient.parseResponse(Data(json.utf8), latitude: 46.0, longitude: 11.0)
-        #expect(result.rain14d == 4.0)
-        #expect(abs(result.avgTemperature - 17.5) < 0.001)
-        #expect(abs(result.avgHumidity - 75.0) < 0.001)
+        let observations = try OpenMeteoClient.parseDailyResponse(Data(json.utf8), latitude: 46.0, longitude: 11.0)
+        #expect(observations.count == 3)
+        // null values become 0
+        #expect(observations[1].rainMm == 0)
+        #expect(observations[0].tempMeanC == 0)
+        #expect(observations[1].humidityPct == 0)
     }
 
-    @Test("parseResponse throws on empty daily arrays")
+    @Test("parseDailyResponse throws on empty daily arrays")
     func emptyArrays() {
         let json = """
         {
@@ -92,7 +98,7 @@ struct OpenMeteoClientTests {
         }
         """
         #expect(throws: WeatherFetchError.self) {
-            try OpenMeteoClient.parseResponse(Data(json.utf8), latitude: 46.0, longitude: 11.0)
+            try OpenMeteoClient.parseDailyResponse(Data(json.utf8), latitude: 46.0, longitude: 11.0)
         }
     }
 
