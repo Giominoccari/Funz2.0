@@ -18,10 +18,11 @@ RUN swift package resolve
 COPY Sources/ Sources/
 COPY Tests/ Tests/
 
-RUN swift build -c release \
+RUN --mount=type=cache,target=/app/.build \
+    swift build -c release \
     --static-swift-stdlib \
     -Xlinker -lstdc++ \
-    && mv .build/release/App /app/App
+    && cp .build/release/App /app/App
 
 # ── Stage 2: Runtime ────────────────────────────────────────
 FROM ubuntu:22.04 AS runtime
