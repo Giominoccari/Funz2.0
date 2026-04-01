@@ -70,6 +70,7 @@ func configure(_ app: Application) async throws {
     // Migrations (auto-migrate in development)
     app.migrations.add(CreateRasterExtensions())
     app.migrations.add(CreateWeatherObservations())
+    app.migrations.add(AddSoilTempColumn())
     try await app.autoMigrate()
 
     // Validate PostGIS raster data (Copernicus DEM required for altitude)

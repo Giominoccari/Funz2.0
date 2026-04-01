@@ -18,6 +18,7 @@ struct CreateWeatherObservations: AsyncMigration {
                 rain_mm         REAL NOT NULL,
                 temp_mean_c     REAL NOT NULL,
                 humidity_pct    REAL NOT NULL,
+                soil_temp_c     REAL,
                 created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
                 PRIMARY KEY (observed_date, id),
                 UNIQUE (latitude, longitude, observed_date)

@@ -90,9 +90,9 @@ struct TileGeneratorTests {
         }
 
         let gen = TileGenerator(tileZoomMin: 6, tileZoomMax: 8)
-        let tiles = await gen.generateAll(results: results, bbox: .trentino)
+        let output = await gen.generateAll(results: results, bbox: .trentino)
 
-        #expect(tiles.count > 0)
+        #expect(output.tiles.count > 0)
     }
 
     @Test("Generated tile has valid PNG header")
@@ -105,9 +105,9 @@ struct TileGeneratorTests {
         }
 
         let gen = TileGenerator(tileZoomMin: 8, tileZoomMax: 8)
-        let tiles = await gen.generateAll(results: results, bbox: .trentino)
+        let output = await gen.generateAll(results: results, bbox: .trentino)
 
-        guard let firstTile = tiles.first else {
+        guard let firstTile = output.tiles.first else {
             Issue.record("No tiles generated")
             return
         }
@@ -130,9 +130,9 @@ struct TileGeneratorTests {
         }
 
         let gen = TileGenerator(tileZoomMin: 8, tileZoomMax: 8)
-        let tiles = await gen.generateAll(results: results, bbox: .trentino)
+        let output = await gen.generateAll(results: results, bbox: .trentino)
 
-        guard let tile = tiles.first, tile.pngData.count > 24 else {
+        guard let tile = output.tiles.first, tile.pngData.count > 24 else {
             Issue.record("No tiles or too small")
             return
         }
@@ -142,14 +142,9 @@ struct TileGeneratorTests {
         // Bytes 12-15: "IHDR"
         // Bytes 16-19: width (big-endian UInt32)
         // Bytes 20-23: height (big-endian UInt32)
-        let width = UInt32(tile.pngData[16]) << 24
-            | UInt32(tile.pngData[17]) << 16
-            | UInt32(tile.pngData[18]) << 8
-            | UInt32(tile.pngData[19])
-        let height = UInt32(tile.pngData[20]) << 24
-            | UInt32(tile.pngData[21]) << 16
-            | UInt32(tile.pngData[22]) << 8
-            | UInt32(tile.pngData[23])
+        let d = tile.pngData
+        let width: UInt32 = (UInt32(d[16]) << 24) | (UInt32(d[17]) << 16) | (UInt32(d[18]) << 8) | UInt32(d[19])
+        let height: UInt32 = (UInt32(d[20]) << 24) | (UInt32(d[21]) << 16) | (UInt32(d[22]) << 8) | UInt32(d[23])
 
         #expect(width == 256)
         #expect(height == 256)

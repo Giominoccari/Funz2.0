@@ -75,26 +75,52 @@ struct CachedWeatherClient: WeatherClient {
 
         // L1: Redis (stores aggregate — fast bypass for the whole daily flow)
         if let cached = try? await cache.get(key: redisKey) {
-            // Return a single pseudo-observation; callers that need real daily data
-            // will go through fetchDailyBatch which checks DB first
             return syntheticObservations(from: cached)
         }
 
-        // L2: PostgreSQL — check for complete daily data
+        // L2: PostgreSQL — check for daily data (complete or partial)
         if let repo = repository {
             let existing = try? await repo.fetchExistingDaily(
                 coordinates: [(latitude: roundedLat, longitude: roundedLon)],
                 from: startDate,
                 to: targetDate
             )
-            if let obs = existing?[0], obs.count >= expectedDays {
-                let aggregate = WeatherData.aggregate(from: obs)
-                try? await cache.set(key: redisKey, value: aggregate, ttl: ttl)
-                return obs
+            if let obs = existing?[0], !obs.isEmpty {
+                if obs.count >= expectedDays {
+                    // Complete — use DB data directly
+                    let aggregate = WeatherData.aggregate(from: obs)
+                    try? await cache.set(key: redisKey, value: aggregate, ttl: ttl)
+                    return obs
+                }
+
+                // Partial — fetch only missing days from API
+                let existingDates = Set(obs.map(\.date))
+                let allDates = Self.generateDateRange(from: startDate, to: targetDate)
+                let missingDates = allDates.filter { !existingDates.contains($0) }
+
+                if !missingDates.isEmpty, let missStart = missingDates.min(), let missEnd = missingDates.max() {
+                    Self.logger.info("Incremental weather fetch", metadata: [
+                        "cached": "\(obs.count)",
+                        "missing": "\(missingDates.count)",
+                        "range": "\(missStart)...\(missEnd)"
+                    ])
+                    let newObs = try await inner.fetchDaily(
+                        latitude: latitude, longitude: longitude,
+                        startDate: missStart, endDate: missEnd
+                    )
+                    let newFiltered = newObs.filter { missingDates.contains($0.date) }
+                    try? await repository?.storeDailyObservations(
+                        entries: [(lat: roundedLat, lon: roundedLon, observations: newFiltered)]
+                    )
+                    let combined = (obs + newFiltered).sorted { $0.date < $1.date }
+                    let aggregate = WeatherData.aggregate(from: combined)
+                    try? await cache.set(key: redisKey, value: aggregate, ttl: ttl)
+                    return combined
+                }
             }
         }
 
-        // L3: Open-Meteo API
+        // L3: Full fetch from Open-Meteo API (no DB data at all)
         let daily = try await inner.fetchDaily(latitude: latitude, longitude: longitude)
         let aggregate = WeatherData.aggregate(from: daily)
         try? await cache.set(key: redisKey, value: aggregate, ttl: ttl)
@@ -107,8 +133,35 @@ struct CachedWeatherClient: WeatherClient {
     func fetchBatch(
         coordinates: [(latitude: Double, longitude: Double)]
     ) async throws -> [WeatherData] {
-        let dailyBatch = try await fetchDailyBatch(coordinates: coordinates)
-        return dailyBatch.map { WeatherData.aggregate(from: $0) }
+        let rounded = coordinates.map { (
+            latitude: (($0.latitude * 1000).rounded() / 1000),
+            longitude: (($0.longitude * 1000).rounded() / 1000)
+        ) }
+
+        // Try Redis first — returns complete WeatherData (preserves maxRain2d, avgSoilTemp7d)
+        var results = [WeatherData?](repeating: nil, count: coordinates.count)
+        var missIndices: [Int] = []
+        for (i, coord) in rounded.enumerated() {
+            let key = "weather:\(coord.latitude):\(coord.longitude):\(targetDate)"
+            if let cached = try? await cache.get(key: key) {
+                results[i] = cached
+            } else {
+                missIndices.append(i)
+            }
+        }
+
+        if missIndices.isEmpty {
+            return results.map { $0! }
+        }
+
+        // Fetch remaining via daily pipeline (DB → API) and aggregate
+        let missCoords = missIndices.map { coordinates[$0] }
+        let dailyBatch = try await fetchDailyBatch(coordinates: missCoords)
+        for (j, idx) in missIndices.enumerated() {
+            results[idx] = WeatherData.aggregate(from: dailyBatch[j])
+        }
+
+        return results.map { $0! }
     }
 
     func fetchDailyBatch(
@@ -145,7 +198,10 @@ struct CachedWeatherClient: WeatherClient {
         }
 
         // L2: Check PostgreSQL for Redis misses — query daily observations
-        var stillMissingIndices = redisMissIndices
+        var fullMissingIndices: [Int] = []  // No DB data at all → need full API fetch
+        var partialIndices: [Int] = []       // Some DB data → need incremental fetch
+        var partialObservations: [Int: [DailyObservation]] = [:]  // Cached partial data
+
         if let repo = repository {
             let uncachedCoords = redisMissIndices.map {
                 (latitude: rounded[$0].latitude, longitude: rounded[$0].longitude)
@@ -153,60 +209,129 @@ struct CachedWeatherClient: WeatherClient {
             if let dbResults = try? await repo.fetchExistingDaily(
                 coordinates: uncachedCoords, from: startDate, to: targetDate
             ) {
-                var newStillMissing: [Int] = []
                 for (j, idx) in redisMissIndices.enumerated() {
-                    if let obs = dbResults[j], obs.count >= expectedDays {
-                        results[idx] = obs
-                        // Backfill Redis with aggregate
-                        let coord = rounded[idx]
-                        let key = "weather:\(coord.latitude):\(coord.longitude):\(targetDate)"
-                        let aggregate = WeatherData.aggregate(from: obs)
-                        try? await cache.set(key: key, value: aggregate, ttl: ttl)
+                    if let obs = dbResults[j], !obs.isEmpty {
+                        if obs.count >= expectedDays {
+                            // Complete DB hit
+                            results[idx] = obs
+                            let coord = rounded[idx]
+                            let key = "weather:\(coord.latitude):\(coord.longitude):\(targetDate)"
+                            let aggregate = WeatherData.aggregate(from: obs)
+                            try? await cache.set(key: key, value: aggregate, ttl: ttl)
+                        } else {
+                            // Partial DB hit — need incremental fetch
+                            partialIndices.append(idx)
+                            partialObservations[idx] = obs
+                        }
                     } else {
-                        newStillMissing.append(idx)
+                        fullMissingIndices.append(idx)
                     }
                 }
-                stillMissingIndices = newStillMissing
 
-                let dbHits = redisMissIndices.count - stillMissingIndices.count
-                if dbHits > 0 {
-                    Self.logger.info("Weather cache: DB hits", metadata: [
-                        "dbCached": "\(dbHits)",
-                        "remaining": "\(stillMissingIndices.count)"
+                let dbHits = redisMissIndices.count - fullMissingIndices.count - partialIndices.count
+                if dbHits > 0 || !partialIndices.isEmpty {
+                    Self.logger.info("Weather cache: DB results", metadata: [
+                        "complete": "\(dbHits)",
+                        "partial": "\(partialIndices.count)",
+                        "missing": "\(fullMissingIndices.count)"
                     ])
                 }
+            } else {
+                fullMissingIndices = redisMissIndices
+            }
+        } else {
+            fullMissingIndices = redisMissIndices
+        }
+
+        // L2.5: Incremental fetch for partial DB hits — fetch only missing days
+        if !partialIndices.isEmpty {
+            let allDates = Self.generateDateRange(from: startDate, to: targetDate)
+            // Find the common set of missing dates (typically the same for all partials)
+            let sampleExisting = Set(partialObservations[partialIndices[0]]!.map(\.date))
+            let missingDates = allDates.filter { !sampleExisting.contains($0) }
+
+            if !missingDates.isEmpty, let missStart = missingDates.min(), let missEnd = missingDates.max() {
+                Self.logger.info("Incremental batch fetch", metadata: [
+                    "coordinates": "\(partialIndices.count)",
+                    "missingDays": "\(missingDates.count)",
+                    "range": "\(missStart)...\(missEnd)"
+                ])
+
+                let partialCoords = partialIndices.map {
+                    (latitude: rounded[$0].latitude, longitude: rounded[$0].longitude)
+                }
+                let fetched = try await inner.fetchDailyBatch(
+                    coordinates: partialCoords,
+                    startDate: missStart,
+                    endDate: missEnd
+                )
+
+                let missingSet = Set(missingDates)
+                var dbEntries: [(lat: Double, lon: Double, observations: [DailyObservation])] = []
+                for (j, idx) in partialIndices.enumerated() {
+                    let newObs = fetched[j].filter { missingSet.contains($0.date) }
+                    let existing = partialObservations[idx]!
+                    let combined = (existing + newObs).sorted { $0.date < $1.date }
+                    results[idx] = combined
+                    let coord = rounded[idx]
+                    let key = "weather:\(coord.latitude):\(coord.longitude):\(targetDate)"
+                    let aggregate = WeatherData.aggregate(from: combined)
+                    try? await cache.set(key: key, value: aggregate, ttl: ttl)
+                    dbEntries.append((lat: coord.latitude, lon: coord.longitude, observations: newObs))
+                }
+                try? await repository?.storeDailyObservations(entries: dbEntries)
             }
         }
 
-        if stillMissingIndices.isEmpty {
+        if fullMissingIndices.isEmpty && partialIndices.allSatisfy({ results[$0] != nil }) {
             return results.map { $0! }
         }
 
-        // L3: Fetch remaining from Open-Meteo API as daily observations
-        let apiCoords = stillMissingIndices.map { rounded[$0] }
-        let fetched = try await inner.fetchDailyBatch(coordinates: apiCoords)
+        // L3: Full fetch for coordinates with no DB data at all
+        if !fullMissingIndices.isEmpty {
+            let apiCoords = fullMissingIndices.map { rounded[$0] }
+            let fetched = try await inner.fetchDailyBatch(coordinates: apiCoords)
 
-        // Store daily observations in DB + aggregate in Redis
-        var dbEntries: [(lat: Double, lon: Double, observations: [DailyObservation])] = []
-        for (j, idx) in stillMissingIndices.enumerated() {
-            let daily = fetched[j]
-            results[idx] = daily
-            let coord = rounded[idx]
-            let key = "weather:\(coord.latitude):\(coord.longitude):\(targetDate)"
-            let aggregate = WeatherData.aggregate(from: daily)
-            try? await cache.set(key: key, value: aggregate, ttl: ttl)
-            dbEntries.append((lat: coord.latitude, lon: coord.longitude, observations: daily))
+            var dbEntries: [(lat: Double, lon: Double, observations: [DailyObservation])] = []
+            for (j, idx) in fullMissingIndices.enumerated() {
+                let daily = fetched[j]
+                results[idx] = daily
+                let coord = rounded[idx]
+                let key = "weather:\(coord.latitude):\(coord.longitude):\(targetDate)"
+                let aggregate = WeatherData.aggregate(from: daily)
+                try? await cache.set(key: key, value: aggregate, ttl: ttl)
+                dbEntries.append((lat: coord.latitude, lon: coord.longitude, observations: daily))
+            }
+            try? await repository?.storeDailyObservations(entries: dbEntries)
         }
-        try? await repository?.storeDailyObservations(entries: dbEntries)
 
         return results.map { $0! }
+    }
+
+    /// Generate all "YYYY-MM-DD" date strings in a range (inclusive).
+    static func generateDateRange(from start: String, to end: String) -> [String] {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        formatter.timeZone = TimeZone(identifier: "UTC")
+        guard let startDate = formatter.date(from: start),
+              let endDate = formatter.date(from: end) else { return [] }
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(identifier: "UTC")!
+        var dates: [String] = []
+        var current = startDate
+        while current <= endDate {
+            dates.append(formatter.string(from: current))
+            guard let next = cal.date(byAdding: .day, value: 1, to: current) else { break }
+            current = next
+        }
+        return dates
     }
 
     /// Create synthetic daily observations from an aggregate for Redis-cached results.
     /// These are used when the caller only needs the aggregate anyway (which is the
     /// common pipeline path). The values aren't true daily data but aggregate correctly.
     private func syntheticObservations(from data: WeatherData) -> [DailyObservation] {
-        // Distribute rain evenly across 14 days, use avg temp/humidity for each day.
+        // Distribute rain evenly across 14 days, use avg temp/humidity/soilTemp for each day.
         // This aggregates back to the same WeatherData values.
         let dailyRain = data.rain14d / Double(expectedDays)
         return (0..<expectedDays).map { _ in
@@ -214,7 +339,8 @@ struct CachedWeatherClient: WeatherClient {
                 date: "",
                 rainMm: dailyRain,
                 tempMeanC: data.avgTemperature,
-                humidityPct: data.avgHumidity
+                humidityPct: data.avgHumidity,
+                soilTempC: data.avgSoilTemp7d
             )
         }
     }

@@ -9,8 +9,8 @@ enum SoilType: String, Codable, Sendable {
     var score: Double {
         switch self {
         case .mixed:      return 1.0
-        case .calcareous: return 0.85
-        case .siliceous:  return 0.70
+        case .siliceous:  return 0.90
+        case .calcareous: return 0.55
         case .other:      return 0.2
         }
     }

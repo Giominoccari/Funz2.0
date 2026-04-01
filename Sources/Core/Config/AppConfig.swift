@@ -57,6 +57,7 @@ struct ScoringWeights: Codable, Sendable {
 
     struct WeatherScoringWeights: Codable, Sendable {
         let rain14d: Double
+        let rainTrigger: Double
         let temperature: Double
     }
 }

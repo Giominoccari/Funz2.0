@@ -34,14 +34,22 @@ struct OpenMeteoClient: WeatherClient {
         computeStartDate(from: targetDate, daysBack: 13)
     }
 
+    func fetchDaily(latitude: Double, longitude: Double, startDate start: String, endDate end: String) async throws -> [DailyObservation] {
+        try await fetchDailyInternal(latitude: latitude, longitude: longitude, start: start, end: end)
+    }
+
     func fetchDaily(latitude: Double, longitude: Double) async throws -> [DailyObservation] {
+        try await fetchDailyInternal(latitude: latitude, longitude: longitude, start: startDate, end: targetDate)
+    }
+
+    private func fetchDailyInternal(latitude: Double, longitude: Double, start: String, end: String) async throws -> [DailyObservation] {
         let roundedLat = (latitude * 1000).rounded() / 1000
         let roundedLon = (longitude * 1000).rounded() / 1000
 
-        let start = startDate
         let urlString = "\(baseURL)?latitude=\(roundedLat)&longitude=\(roundedLon)"
-            + "&start_date=\(start)&end_date=\(targetDate)"
+            + "&start_date=\(start)&end_date=\(end)"
             + "&daily=rain_sum,temperature_2m_mean,relative_humidity_2m_mean"
+            + "&hourly=soil_temperature_0_to_7cm"
             + "&timezone=Europe%2FRome"
 
         await rateLimiter.consume()
@@ -123,17 +131,34 @@ struct OpenMeteoClient: WeatherClient {
             throw WeatherFetchError.noData(latitude: latitude, longitude: longitude)
         }
 
-        return toDailyObservations(daily)
+        return toDailyObservations(daily, hourly: response.hourly)
+    }
+
+    /// Fetch daily observations for multiple coordinates with a specific date range.
+    func fetchDailyBatch(
+        coordinates: [(latitude: Double, longitude: Double)],
+        startDate start: String,
+        endDate end: String
+    ) async throws -> [[DailyObservation]] {
+        try await fetchDailyBatchInternal(coordinates: coordinates, start: start, end: end)
     }
 
     /// Fetch daily observations for multiple coordinates in a single API call.
     func fetchDailyBatch(
         coordinates: [(latitude: Double, longitude: Double)]
     ) async throws -> [[DailyObservation]] {
+        try await fetchDailyBatchInternal(coordinates: coordinates, start: startDate, end: targetDate)
+    }
+
+    private func fetchDailyBatchInternal(
+        coordinates: [(latitude: Double, longitude: Double)],
+        start: String,
+        end: String
+    ) async throws -> [[DailyObservation]] {
         guard !coordinates.isEmpty else { return [] }
 
         if coordinates.count == 1 {
-            return [try await fetchDaily(latitude: coordinates[0].latitude, longitude: coordinates[0].longitude)]
+            return [try await fetchDailyInternal(latitude: coordinates[0].latitude, longitude: coordinates[0].longitude, start: start, end: end)]
         }
 
         let rounded = coordinates.map { (
@@ -144,10 +169,10 @@ struct OpenMeteoClient: WeatherClient {
         let lats = rounded.map { "\($0.lat)" }.joined(separator: ",")
         let lons = rounded.map { "\($0.lon)" }.joined(separator: ",")
 
-        let start = startDate
         let urlString = "\(baseURL)?latitude=\(lats)&longitude=\(lons)"
-            + "&start_date=\(start)&end_date=\(targetDate)"
+            + "&start_date=\(start)&end_date=\(end)"
             + "&daily=rain_sum,temperature_2m_mean,relative_humidity_2m_mean"
+            + "&hourly=soil_temperature_0_to_7cm"
             + "&timezone=Europe%2FRome"
 
         await rateLimiter.consume()
@@ -240,18 +265,52 @@ struct OpenMeteoClient: WeatherClient {
             )
         }
 
-        return responses.map { toDailyObservations($0.daily) }
+        return responses.map { toDailyObservations($0.daily, hourly: $0.hourly) }
     }
 
     // MARK: - Helpers
 
-    private static func toDailyObservations(_ daily: OpenMeteoResponse.DailyData) -> [DailyObservation] {
-        (0..<daily.time.count).map { i in
+    /// Compute daily mean soil temperature from hourly data.
+    /// Returns one value per day in `daily.time` order. Falls back to air temp if hourly data missing.
+    private static func dailySoilTemps(
+        hourly: OpenMeteoResponse.HourlyData?,
+        daily: OpenMeteoResponse.DailyData
+    ) -> [Double] {
+        guard let hourly = hourly, !hourly.time.isEmpty else {
+            // Fallback: estimate soil temp as slightly damped air temp
+            return daily.temperature2mMean.map { ($0 ?? 0) * 0.85 }
+        }
+
+        // Group hourly values by date prefix (first 10 chars = "YYYY-MM-DD")
+        var dailyMeans: [String: Double] = [:]
+        var dailyCounts: [String: Int] = [:]
+        for (i, timeStr) in hourly.time.enumerated() {
+            guard let val = hourly.soilTemperature0To7cm[i] else { continue }
+            let dateKey = String(timeStr.prefix(10))
+            dailyMeans[dateKey, default: 0] += val
+            dailyCounts[dateKey, default: 0] += 1
+        }
+
+        return daily.time.map { date in
+            if let sum = dailyMeans[date], let count = dailyCounts[date], count > 0 {
+                return sum / Double(count)
+            }
+            return 0
+        }
+    }
+
+    private static func toDailyObservations(
+        _ daily: OpenMeteoResponse.DailyData,
+        hourly: OpenMeteoResponse.HourlyData?
+    ) -> [DailyObservation] {
+        let soilTemps = dailySoilTemps(hourly: hourly, daily: daily)
+        return (0..<daily.time.count).map { i in
             DailyObservation(
                 date: daily.time[i],
                 rainMm: daily.rainSum[i] ?? 0,
                 tempMeanC: daily.temperature2mMean[i] ?? 0,
-                humidityPct: daily.relativeHumidity2mMean[i] ?? 0
+                humidityPct: daily.relativeHumidity2mMean[i] ?? 0,
+                soilTempC: i < soilTemps.count ? soilTemps[i] : 0
             )
         }
     }

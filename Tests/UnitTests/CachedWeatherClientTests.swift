@@ -9,21 +9,23 @@ struct CachedWeatherClientTests {
     static func makeDailyObs(
         dailyRain: Double = 3.0,
         temp: Double = 18.0,
-        humidity: Double = 75.0
+        humidity: Double = 75.0,
+        soilTemp: Double = 14.0
     ) -> [DailyObservation] {
         (0..<14).map { i in
             DailyObservation(
                 date: "2026-03-\(String(format: "%02d", 1 + i))",
                 rainMm: dailyRain,
                 tempMeanC: temp,
-                humidityPct: humidity
+                humidityPct: humidity,
+                soilTempC: soilTemp
             )
         }
     }
 
     @Test("returns cached data on cache hit")
     func cacheHit() async throws {
-        let cachedData = WeatherData(rain14d: 42.0, avgTemperature: 18.0, avgHumidity: 75.0)
+        let cachedData = WeatherData(rain14d: 42.0, maxRain2d: 6.0, avgTemperature: 18.0, avgHumidity: 75.0, avgSoilTemp7d: 14.0)
         let cache = MockWeatherCache()
         let key = "weather:46.07:11.12:2026-03-14"
         try await cache.set(key: key, value: cachedData, ttl: 3600)
@@ -77,6 +79,20 @@ struct CachedWeatherClientTests {
 
         // Different dates → different cache keys → 2 inner fetches
         #expect(spy.fetchDailyCount == 2)
+    }
+    @Test("generateDateRange produces correct dates")
+    func dateRange() {
+        let dates = CachedWeatherClient.generateDateRange(from: "2026-03-28", to: "2026-04-01")
+        #expect(dates.count == 5)
+        #expect(dates.first == "2026-03-28")
+        #expect(dates.last == "2026-04-01")
+    }
+
+    @Test("generateDateRange single day")
+    func dateRangeSingleDay() {
+        let dates = CachedWeatherClient.generateDateRange(from: "2026-03-25", to: "2026-03-25")
+        #expect(dates.count == 1)
+        #expect(dates.first == "2026-03-25")
     }
 }
 

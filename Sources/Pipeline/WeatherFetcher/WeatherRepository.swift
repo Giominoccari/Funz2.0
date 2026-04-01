@@ -89,7 +89,7 @@ actor WeatherRepository {
         let valuePairs = coordinates.map { "(\($0.latitude), \($0.longitude))" }.joined(separator: ", ")
 
         let rows = try await db.raw("""
-            SELECT w.latitude, w.longitude, w.observed_date, w.rain_mm, w.temp_mean_c, w.humidity_pct
+            SELECT w.latitude, w.longitude, w.observed_date, w.rain_mm, w.temp_mean_c, w.humidity_pct, COALESCE(w.soil_temp_c, w.temp_mean_c * 0.85) AS soil_temp_c
             FROM weather_observations w
             INNER JOIN (VALUES \(unsafeRaw: valuePairs)) AS q(lat, lon)
                 ON w.latitude = q.lat AND w.longitude = q.lon
@@ -105,9 +105,10 @@ actor WeatherRepository {
             let rain = try row.decode(column: "rain_mm", as: Double.self)
             let temp = try row.decode(column: "temp_mean_c", as: Double.self)
             let hum = try row.decode(column: "humidity_pct", as: Double.self)
+            let soilTemp = try row.decode(column: "soil_temp_c", as: Double.self)
 
             let key = "\(lat),\(lon)"
-            let obs = DailyObservation(date: date, rainMm: rain, tempMeanC: temp, humidityPct: hum)
+            let obs = DailyObservation(date: date, rainMm: rain, tempMeanC: temp, humidityPct: hum, soilTempC: soilTemp)
 
             if let indices = coordToIndices[key] {
                 for idx in indices {
@@ -126,10 +127,10 @@ actor WeatherRepository {
         entries: [(lat: Double, lon: Double, observations: [DailyObservation])]
     ) async throws {
         // Flatten into individual rows
-        var allRows: [(lat: Double, lon: Double, date: String, rain: Double, temp: Double, hum: Double)] = []
+        var allRows: [(lat: Double, lon: Double, date: String, rain: Double, temp: Double, hum: Double, soilTemp: Double)] = []
         for entry in entries {
             for obs in entry.observations {
-                allRows.append((entry.lat, entry.lon, obs.date, obs.rainMm, obs.tempMeanC, obs.humidityPct))
+                allRows.append((entry.lat, entry.lon, obs.date, obs.rainMm, obs.tempMeanC, obs.humidityPct, obs.soilTempC))
             }
         }
 
@@ -141,11 +142,11 @@ actor WeatherRepository {
             let batch = allRows[batchStart..<batchEnd]
 
             let values = batch.map { row in
-                "(\(row.lat), \(row.lon), '\(row.date)', \(row.rain), \(row.temp), \(row.hum))"
+                "(\(row.lat), \(row.lon), '\(row.date)', \(row.rain), \(row.temp), \(row.hum), \(row.soilTemp))"
             }.joined(separator: ", ")
 
             try await db.raw("""
-                INSERT INTO weather_observations (latitude, longitude, observed_date, rain_mm, temp_mean_c, humidity_pct)
+                INSERT INTO weather_observations (latitude, longitude, observed_date, rain_mm, temp_mean_c, humidity_pct, soil_temp_c)
                 VALUES \(unsafeRaw: values)
                 ON CONFLICT (latitude, longitude, observed_date) DO NOTHING
                 """).run()

@@ -80,7 +80,7 @@ BEGIN
     --
     -- Uses seeded pseudo-random based on lat/lon/day_offset for reproducibility.
     FOR v_cur IN SELECT generate_series(v_start, v_target, '1 day'::interval)::date LOOP
-        INSERT INTO weather_observations (latitude, longitude, observed_date, rain_mm, temp_mean_c, humidity_pct)
+        INSERT INTO weather_observations (latitude, longitude, observed_date, rain_mm, temp_mean_c, humidity_pct, soil_temp_c)
         SELECT
             round(lat::numeric, 3)::double precision,
             round(lon::numeric, 3)::double precision,
@@ -90,7 +90,9 @@ BEGIN
             -- daily temp: 8-18C, warmer in south, slight day-to-day variation
             round((18 - 10 * ((lat - 36.6) / 10.5) + 2 * sin(lon * 7 + lat * 11 + day_off * 3))::numeric, 1),
             -- daily humidity: 55-85%, varies by position and day
-            round((70 + 15 * sin(lon * 5 + lat * 3 + day_off * 5))::numeric, 1)
+            round((70 + 15 * sin(lon * 5 + lat * 3 + day_off * 5))::numeric, 1),
+            -- soil temp: damped air temp (~85% of air temp + 2°C offset), less daily variation
+            round(((18 - 10 * ((lat - 36.6) / 10.5)) * 0.85 + 2 + 0.5 * sin(lon * 3 + lat * 5 + day_off * 2))::numeric, 1)
         FROM
             generate_series(36.6, 47.19, 0.09) AS lat,
             generate_series(6.6, 18.59, 0.09) AS lon,
@@ -98,7 +100,8 @@ BEGIN
         ON CONFLICT (latitude, longitude, observed_date) DO UPDATE SET
             rain_mm      = EXCLUDED.rain_mm,
             temp_mean_c  = EXCLUDED.temp_mean_c,
-            humidity_pct = EXCLUDED.humidity_pct;
+            humidity_pct = EXCLUDED.humidity_pct,
+            soil_temp_c  = EXCLUDED.soil_temp_c;
 
         GET DIAGNOSTICS v_count = ROW_COUNT;
         v_total := v_total + v_count;

@@ -40,46 +40,47 @@ struct WorkerCommand: AsyncCommand {
         let config = try ConfigLoader.load()
         let sqlDb = app.db as! any SQLDatabase
 
-        let weatherClient: any WeatherClient
+        // Verify Redis connectivity before pipeline
+        do {
+            let pong = try await app.redis.ping().get()
+            logger.info("Redis connected", metadata: ["ping": "\(pong)"])
+        } catch {
+            logger.warning("Redis not reachable, running without cache", metadata: ["error": "\(error)"])
+        }
+
+        let redis = RedisWeatherCache(redis: app.redis)
+        let weatherRepo = WeatherRepository(db: sqlDb)
+
+        let innerClient: any WeatherClient
         if signature.mockWeather {
             logger.info("Using mock weather data (--mock-weather flag)")
-            weatherClient = MockWeatherClient(bbox: bbox)
+            innerClient = MockWeatherClient(bbox: bbox, targetDate: date)
         } else {
-            let httpClient = app.http.client.shared
-
-            // Verify Redis connectivity before pipeline
-            do {
-                let pong = try await app.redis.ping().get()
-                logger.info("Redis connected", metadata: ["ping": "\(pong)"])
-            } catch {
-                logger.warning("Redis not reachable, running without cache", metadata: ["error": "\(error)"])
-            }
-
-            let redis = RedisWeatherCache(redis: app.redis)
-            let weatherRepo = WeatherRepository(db: sqlDb)
-
-            let openMeteo = OpenMeteoClient(
-                httpClient: httpClient,
+            innerClient = OpenMeteoClient(
+                httpClient: app.http.client.shared,
                 targetDate: date,
                 config: config.pipeline.weather
             )
-
-            // Ensure partitions exist for the full 14-day observation window
-            do {
-                try await weatherRepo.ensurePartitions(from: openMeteo.startDate, to: date)
-            } catch {
-                logger.warning("Failed to create weather partitions", metadata: [
-                    "error": "\(String(reflecting: error))"
-                ])
-            }
-            weatherClient = CachedWeatherClient(
-                inner: openMeteo,
-                cache: redis,
-                ttl: config.pipeline.weather.cacheTTLSeconds,
-                targetDate: date,
-                repository: weatherRepo
-            )
         }
+
+        // Ensure partitions exist for the full 14-day observation window
+        let startDate = Self.dateString(daysBack: 13, from: date)
+        do {
+            try await weatherRepo.ensurePartitions(from: startDate, to: date)
+        } catch {
+            logger.warning("Failed to create weather partitions", metadata: [
+                "error": "\(String(reflecting: error))"
+            ])
+        }
+
+        // Always wrap in CachedWeatherClient so data flows through DB (even for mock)
+        let weatherClient: any WeatherClient = CachedWeatherClient(
+            inner: innerClient,
+            cache: redis,
+            ttl: config.pipeline.weather.cacheTTLSeconds,
+            targetDate: date,
+            repository: weatherRepo
+        )
 
         var pipelineConfig = config.pipeline
         if let maxZoom = signature.maxZoom {
@@ -122,5 +123,16 @@ struct WorkerCommand: AsyncCommand {
         formatter.dateFormat = "yyyy-MM-dd"
         formatter.timeZone = TimeZone(identifier: "Europe/Rome")
         return formatter.string(from: Date())
+    }
+
+    private static func dateString(daysBack: Int, from dateString: String) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        formatter.timeZone = TimeZone(identifier: "UTC")
+        guard let end = formatter.date(from: dateString),
+              let start = Calendar(identifier: .gregorian).date(byAdding: .day, value: -daysBack, to: end) else {
+            return dateString
+        }
+        return formatter.string(from: start)
     }
 }

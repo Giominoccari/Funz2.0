@@ -21,7 +21,8 @@ actor PipelineRunner {
         self.tileUploader = tileUploader
     }
 
-    func run(bbox: BoundingBox) async throws -> [ScoringEngine.Result] {
+    func run(bbox: BoundingBox, date: String = "") async throws -> [ScoringEngine.Result] {
+        let dayOfYear = Self.extractDayOfYear(from: date)
         let runStart = ContinuousClock.now
 
         // Phase 1 + 2: Generate grid and enrich with geo data.
@@ -67,10 +68,13 @@ actor PipelineRunner {
         // Phase 4: Score
         let phaseStart4 = ContinuousClock.now
         let engine = ScoringEngine(weights: config.scoringWeights)
+        let defaultWeather = WeatherData(
+            rain14d: 0, maxRain2d: 0, avgTemperature: 0, avgHumidity: 0, avgSoilTemp7d: 0
+        )
         let inputs = points.map { point in
             let key = "\(point.latitude),\(point.longitude)"
-            let weather = weatherMap[key] ?? WeatherData(rain14d: 0, avgTemperature: 0, avgHumidity: 0)
-            return ScoringEngine.Input(point: point, weather: weather)
+            let weather = weatherMap[key] ?? defaultWeather
+            return ScoringEngine.Input(point: point, weather: weather, dayOfYear: dayOfYear)
         }
 
         let results = engine.scoreBatch(inputs)
@@ -99,7 +103,7 @@ actor PipelineRunner {
         let fullStart = ContinuousClock.now
 
         // Phases 1-4: Scoring
-        let results = try await run(bbox: bbox)
+        let results = try await run(bbox: bbox, date: date)
 
         // Phase 5: Tile generation + save score raster for dynamic tiles
         let phaseStart5 = ContinuousClock.now
@@ -206,7 +210,9 @@ actor PipelineRunner {
     /// Instead of fetching 24K+ points, we sample a coarse grid and map each
     /// fine-grid point to its nearest coarse sample.
     private func fetchWeather(for points: [GridPoint]) async -> [String: WeatherData] {
-        let defaultWeather = WeatherData(rain14d: 0, avgTemperature: 0, avgHumidity: 0)
+        let defaultWeather = WeatherData(
+            rain14d: 0, maxRain2d: 0, avgTemperature: 0, avgHumidity: 0, avgSoilTemp7d: 0
+        )
         guard let first = points.first else { return [:] }
 
         // Determine bbox from points
@@ -343,8 +349,10 @@ actor PipelineRunner {
             let centerLonCell = Int(floor(point.longitude / weatherCellSize))
 
             var weightedRain = 0.0
+            var weightedMaxRain2d = 0.0
             var weightedTemp = 0.0
             var weightedHum = 0.0
+            var weightedSoilTemp = 0.0
             var totalWeight = 0.0
             var exactMatch = false
 
@@ -360,8 +368,10 @@ actor PipelineRunner {
 
                         if distSq < 1e-12 {
                             weightedRain = cw.data.rain14d
+                            weightedMaxRain2d = cw.data.maxRain2d
                             weightedTemp = cw.data.avgTemperature
                             weightedHum = cw.data.avgHumidity
+                            weightedSoilTemp = cw.data.avgSoilTemp7d
                             totalWeight = 1.0
                             exactMatch = true
                             break outer
@@ -369,8 +379,10 @@ actor PipelineRunner {
 
                         let weight = 1.0 / (distSq * distSq) // power=4 for smoother falloff
                         weightedRain += weight * cw.data.rain14d
+                        weightedMaxRain2d += weight * cw.data.maxRain2d
                         weightedTemp += weight * cw.data.avgTemperature
                         weightedHum += weight * cw.data.avgHumidity
+                        weightedSoilTemp += weight * cw.data.avgSoilTemp7d
                         totalWeight += weight
                     }
                 }
@@ -380,14 +392,18 @@ actor PipelineRunner {
                 if exactMatch {
                     weatherMap[key] = WeatherData(
                         rain14d: weightedRain,
+                        maxRain2d: weightedMaxRain2d,
                         avgTemperature: weightedTemp,
-                        avgHumidity: weightedHum
+                        avgHumidity: weightedHum,
+                        avgSoilTemp7d: weightedSoilTemp
                     )
                 } else {
                     weatherMap[key] = WeatherData(
                         rain14d: weightedRain / totalWeight,
+                        maxRain2d: weightedMaxRain2d / totalWeight,
                         avgTemperature: weightedTemp / totalWeight,
-                        avgHumidity: weightedHum / totalWeight
+                        avgHumidity: weightedHum / totalWeight,
+                        avgSoilTemp7d: weightedSoilTemp / totalWeight
                     )
                 }
             } else {
@@ -553,5 +569,15 @@ actor PipelineRunner {
     private static func isSuitableTerrain(_ point: GridPoint) -> Bool {
         guard point.altitude > 0, point.altitude <= 2300 else { return false }
         return GridPoint.suitableCORINECodes.contains(point.corineCode)
+    }
+
+    /// Extract day-of-year (1-366) from a "YYYY-MM-DD" date string.
+    /// Falls back to June 15 (prime season) if parsing fails.
+    static func extractDayOfYear(from dateString: String) -> Int {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        formatter.timeZone = TimeZone(identifier: "UTC")
+        guard let date = formatter.date(from: dateString) else { return 166 }
+        return Calendar(identifier: .gregorian).ordinality(of: .day, in: .year, for: date) ?? 166
     }
 }
