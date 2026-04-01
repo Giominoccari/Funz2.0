@@ -1,0 +1,17 @@
+.build/
+.git/
+.gitignore
+.env*
+.venv/
+Keys/
+docs/
+infra/beta/
+infra/cloudformation/
+infra/ecs/
+infra/nginx/
+infra/scripts/
+infra/Brewfile
+Makefile
+CLAUDE.md
+README.md
+*.md

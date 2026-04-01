@@ -93,7 +93,7 @@ actor WeatherRepository {
             FROM weather_observations w
             INNER JOIN (VALUES \(unsafeRaw: valuePairs)) AS q(lat, lon)
                 ON w.latitude = q.lat AND w.longitude = q.lon
-            WHERE w.observed_date BETWEEN \(bind: startDate) AND \(bind: endDate)
+            WHERE w.observed_date BETWEEN CAST(\(bind: startDate) AS date) AND CAST(\(bind: endDate) AS date)
             ORDER BY w.latitude, w.longitude, w.observed_date
             """).all()
 
@@ -180,9 +180,12 @@ actor WeatherRepository {
         to: String
     ) async throws -> NearestPointResult? {
         let nearestRows = try await db.raw("""
-            SELECT DISTINCT latitude, longitude
-            FROM weather_observations
-            WHERE observed_date BETWEEN \(bind: from) AND \(bind: to)
+            SELECT latitude, longitude
+            FROM (
+                SELECT DISTINCT latitude, longitude
+                FROM weather_observations
+                WHERE observed_date BETWEEN CAST(\(bind: from) AS date) AND CAST(\(bind: to) AS date)
+            ) AS pts
             ORDER BY (latitude - \(bind: latitude)) * (latitude - \(bind: latitude))
                    + (longitude - \(bind: longitude)) * (longitude - \(bind: longitude))
             LIMIT 1
@@ -204,7 +207,7 @@ actor WeatherRepository {
             FROM weather_observations
             WHERE latitude = \(bind: nearLat)
               AND longitude = \(bind: nearLon)
-              AND observed_date BETWEEN \(bind: from) AND \(bind: to)
+              AND observed_date BETWEEN CAST(\(bind: from) AS date) AND CAST(\(bind: to) AS date)
             ORDER BY observed_date
             """).all()
 

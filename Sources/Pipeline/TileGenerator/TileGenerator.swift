@@ -53,7 +53,14 @@ struct TileGenerator: Sendable {
             ) { group in
                 for coord in tileCoords {
                     group.addTask {
-                        renderTile(coord: coord, raster: raster, scoreRange: scoreRange)
+                        // Early skip: check if tile bbox has any score data
+                        let bounds = TileMath.tileBounds(x: coord.x, y: coord.y, z: coord.z)
+                        guard raster.hasData(
+                            minLat: bounds.minLat, maxLat: bounds.maxLat,
+                            minLon: bounds.minLon, maxLon: bounds.maxLon
+                        ) else { return nil }
+
+                        return renderTile(coord: coord, raster: raster, scoreRange: scoreRange)
                     }
                 }
 

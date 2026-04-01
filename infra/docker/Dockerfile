@@ -14,11 +14,9 @@ WORKDIR /app
 COPY Package.swift Package.resolved ./
 RUN swift package resolve
 
-# Copy source and build release
+# Copy only what affects compilation (order matters for cache!)
 COPY Sources/ Sources/
 COPY Tests/ Tests/
-COPY config/ config/
-COPY Public/ Public/
 
 RUN swift build -c release \
     --static-swift-stdlib \
@@ -43,10 +41,12 @@ RUN useradd --create-home --shell /bin/bash appuser
 
 WORKDIR /app
 
-# Copy binary and static assets from build stage
+# Copy binary from build stage
 COPY --from=build /app/App /app/App
-COPY --from=build /app/config/ /app/config/
-COPY --from=build /app/Public/ /app/Public/
+
+# Copy static assets directly (changes here don't invalidate the Swift build cache)
+COPY config/ /app/config/
+COPY Public/ /app/Public/
 
 RUN chown -R appuser:appuser /app
 USER appuser

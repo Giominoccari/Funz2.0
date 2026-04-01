@@ -16,6 +16,8 @@ struct MapController: RouteCollection, Sendable {
         map.get("dev-tiles", ":date", ":z", ":x", ":y", use: getDevTile)
         // Dynamic tiles: on-the-fly rendering with min_score threshold
         map.get("dynamic-tiles", ":date", ":z", ":x", ":y", use: getDynamicTile)
+        // Score point lookup
+        map.get("score", use: getScore)
         // Dates listing remains public
         map.get("dates", use: getDates)
     }
@@ -157,6 +159,51 @@ struct MapController: RouteCollection, Sendable {
         headers.add(name: .contentType, value: "image/png")
         headers.add(name: .cacheControl, value: "public, max-age=300")
         return Response(status: .ok, headers: headers, body: .init(data: Data(pngData)))
+    }
+
+    // MARK: - GET /map/score?lat=X&lon=Y&date=YYYY-MM-DD
+
+    struct ScoreResponse: Content {
+        let latitude: Double
+        let longitude: Double
+        let date: String
+        let score: Int?
+    }
+
+    @Sendable
+    func getScore(req: Request) async throws -> ScoreResponse {
+        guard let latStr = req.query[String.self, at: "lat"],
+              let lonStr = req.query[String.self, at: "lon"],
+              let lat = Double(latStr),
+              let lon = Double(lonStr)
+        else {
+            throw Abort(.badRequest, reason: "Missing or invalid lat/lon query parameters")
+        }
+
+        let date: String
+        if let d = req.query[String.self, at: "date"], !d.isEmpty {
+            date = d
+        } else {
+            // Default to latest available date
+            let tilesDir = req.application.directory.workingDirectory + "Storage/tiles"
+            let formatter = DateFormatter()
+            formatter.dateFormat = "yyyy-MM-dd"
+            let contents = (try? FileManager.default.contentsOfDirectory(atPath: tilesDir)) ?? []
+            guard let latest = contents.filter({ formatter.date(from: $0) != nil }).sorted().last else {
+                return ScoreResponse(latitude: lat, longitude: lon, date: "", score: nil)
+            }
+            date = latest
+        }
+
+        let basePath = req.application.directory.workingDirectory + "Storage/tiles"
+        guard let cached = await RasterCache.shared.get(date: date, basePath: basePath) else {
+            return ScoreResponse(latitude: lat, longitude: lon, date: date, score: nil)
+        }
+
+        let rawScore = cached.raster.sample(latitude: lat, longitude: lon)
+        let score = rawScore.map { Int(($0 * 100).rounded()) }
+
+        return ScoreResponse(latitude: lat, longitude: lon, date: date, score: score)
     }
 
     // MARK: - GET /map/dates

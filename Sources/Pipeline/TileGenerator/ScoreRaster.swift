@@ -129,6 +129,39 @@ struct ScoreRaster: Sendable {
         return found ? (min: Double(lo), max: Double(hi)) : nil
     }
 
+    /// Fast check: does the given lat/lon bounding box contain any non-zero score data?
+    /// Used to skip empty tiles before iterating 256×256 pixels.
+    func hasData(minLat: Double, maxLat: Double, minLon: Double, maxLon: Double) -> Bool {
+        // Map bounds to raster row/col range (clamp to grid)
+        let colStart = max(0, Int(floor((minLon - self.minLon) / lonStep)))
+        let colEnd = min(width - 1, Int(ceil((maxLon - self.minLon) / lonStep)))
+        let rowStart = max(0, Int(floor((minLat - self.minLat) / latStep)))
+        let rowEnd = min(height - 1, Int(ceil((maxLat - self.minLat) / latStep)))
+
+        guard colStart <= colEnd, rowStart <= rowEnd else { return false }
+
+        // Sample every 4th cell instead of every cell — still catches any non-empty region
+        // since score data has ~500m spacing and tiles cover much larger areas
+        let step = max(1, min((rowEnd - rowStart) / 8, (colEnd - colStart) / 8))
+        for row in stride(from: rowStart, through: rowEnd, by: step) {
+            for col in stride(from: colStart, through: colEnd, by: step) {
+                if data[row * width + col] > 0.001 { return true }
+            }
+        }
+        // Full scan of edges to catch thin strips missed by strided sampling
+        for row in [rowStart, rowEnd] {
+            for col in colStart...colEnd {
+                if data[row * width + col] > 0.001 { return true }
+            }
+        }
+        for row in rowStart...rowEnd {
+            for col in [colStart, colEnd] {
+                if data[row * width + col] > 0.001 { return true }
+            }
+        }
+        return false
+    }
+
     /// Bilinear interpolation sample. Returns nil if outside data coverage.
     func sample(latitude: Double, longitude: Double) -> Double? {
         let col = (longitude - minLon) / lonStep

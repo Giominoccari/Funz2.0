@@ -192,6 +192,11 @@ beta-rebuild: ## Rebuild image and restart app only (DB + Redis stay up)
 	$(BETA_COMPOSE) up -d app --wait --force-recreate
 	@echo "✔ App rebuilt and restarted"
 
+beta-quick: ## Quick redeploy: static assets only (no Swift recompile). Use when only config/ or Public/ changed.
+	docker rm -f funz-beta-app 2>/dev/null || true
+	$(BETA_COMPOSE) up -d app --wait
+	@echo "✔ App restarted with updated static assets (no rebuild)"
+
 # ─── Beta: Infrastructure ────────────────────────────────────────
 beta-setup: ## One-time setup: install nginx, certbot, DuckDNS (run on beta Mac)
 	@bash infra/beta/setup.sh

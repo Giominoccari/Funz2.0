@@ -95,6 +95,20 @@
         .track-start { background: #2ecc71; }
         .track-end   { background: #FF6B00; }
 
+        /* ── Center crosshair ── */
+        #crosshair {
+            position: absolute;
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 10;
+            pointer-events: none;
+        }
+        .crosshair-dot {
+            width: 10px; height: 10px; border-radius: 50%;
+            border: 2px solid rgba(255,255,255,.85);
+            box-shadow: 0 0 0 1px rgba(0,0,0,.2), inset 0 0 0 1px rgba(0,0,0,.15);
+        }
+
         /* ── Maplibre popup overrides ── */
         .maplibregl-popup-content {
             font-family: -apple-system, BlinkMacSystemFont, sans-serif;
@@ -107,6 +121,10 @@
 </head>
 <body>
     <div id="map"></div>
+    <!-- Center crosshair -->
+    <div id="crosshair">
+        <div class="crosshair-dot"></div>
+    </div>
     <script>
         // ── Parse query parameters from the URL ──
         const params = new URLSearchParams(window.location.search);
@@ -386,26 +404,44 @@
 
         window.clearTrack = clearTrack;
 
-        // ── Map click → send coordinates back to native app ──
-        map.on('click', (e) => {
-            const lat = e.lngLat.lat;
-            const lon = e.lngLat.lng;
-
-            // Query the funghi overlay pixel value at click point (approximate via tile)
-            let value = 0;
-            const features = map.queryRenderedFeatures(e.point, { layers: ['funghi-layer'] });
-            // Raster layers don't expose pixel values via queryRenderedFeatures,
-            // so we send 0 and let the native side handle lookup if needed.
-
-            // Send to native WKWebView
+        // ── Send map center coordinates to native app ──
+        let moveEndTimer = null;
+        function sendCenterToNative() {
+            const center = map.getCenter();
             if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.coordinateHandler) {
                 window.webkit.messageHandlers.coordinateHandler.postMessage({
-                    lat: lat,
-                    lon: lon,
-                    value: value
+                    lat: center.lat,
+                    lon: center.lng,
+                    value: 0
                 });
             }
+        }
+
+        // Debounced: update on pan/zoom end
+        map.on('moveend', () => {
+            clearTimeout(moveEndTimer);
+            moveEndTimer = setTimeout(sendCenterToNative, 300);
         });
+
+        // Also on click (snap center to tapped point)
+        map.on('click', (e) => {
+            map.flyTo({ center: [e.lngLat.lng, e.lngLat.lat], duration: 400 });
+        });
+
+        // Recenter map to user position (called from native)
+        let lastUserLat = null, lastUserLon = null;
+        const _origSetUserLocation = setUserLocation;
+        setUserLocation = function(lat, lon) {
+            lastUserLat = lat;
+            lastUserLon = lon;
+            _origSetUserLocation(lat, lon);
+        };
+
+        window.recenterToUser = function() {
+            if (lastUserLat != null && lastUserLon != null) {
+                map.flyTo({ center: [lastUserLon, lastUserLat], duration: 800 });
+            }
+        };
 
         // ── Bridge: Native → Web functions ──
 
