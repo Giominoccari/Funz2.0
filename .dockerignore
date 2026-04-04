@@ -3,7 +3,10 @@
 .gitignore
 .env*
 .venv/
+.cache/
 Keys/
+data/
+Storage/
 docs/
 infra/beta/
 infra/cloudformation/

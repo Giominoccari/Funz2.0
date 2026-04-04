@@ -1,27 +1,32 @@
+# Funghi Map — Unified Docker Compose
+# Same file for local dev and beta. Behavior differs via .env values.
+# Usage: docker compose -f infra/docker/docker-compose.yml --env-file .env up -d
+
 services:
   postgres:
     image: postgis/postgis:16-3.5
-    platform: linux/amd64
-    container_name: funghimap-postgres
+    container_name: funz-postgres
+    restart: ${RESTART_POLICY:-no}
     environment:
-      POSTGRES_USER: funghimap
-      POSTGRES_PASSWORD: funghimap_dev
-      POSTGRES_DB: funghimap_dev
+      POSTGRES_USER: ${DB_USER:-funghimap}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-funghimap_dev}
+      POSTGRES_DB: ${DB_NAME:-funghimap_dev}
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U funghimap -d funghimap_dev"]
+      test: ["CMD-SHELL", "pg_isready -U funghimap"]
       interval: 5s
       timeout: 5s
       retries: 10
 
   redis:
     image: redis:7-alpine
-    container_name: funghimap-redis
+    container_name: funz-redis
+    restart: ${RESTART_POLICY:-no}
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     volumes:
       - redisdata:/data
     healthcheck:
@@ -30,6 +35,42 @@ services:
       timeout: 5s
       retries: 10
 
+  app:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile
+    image: funz:latest
+    container_name: funz-app
+    restart: ${RESTART_POLICY:-no}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://${DB_USER:-funghimap}:${DB_PASSWORD:-funghimap_dev}@postgres:5432/${DB_NAME:-funghimap_dev}
+      REDIS_URL: redis://redis:6379
+      JWT_PRIVATE_KEY_FILE: /app/Keys/jwt_private.pem
+      ADMIN_API_KEY: ${ADMIN_API_KEY:-}
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+    volumes:
+      - ../../Keys:/app/Keys:ro
+      - ../../Storage/tiles:/app/Storage/tiles
+      - ../../.cache:/app/.cache
+    ports:
+      - "127.0.0.1:8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+
 volumes:
   pgdata:
+    external: true
+    name: ${VOLUME_PGDATA:-docker_pgdata}
   redisdata:
+    external: true
+    name: ${VOLUME_REDISDATA:-docker_redisdata}

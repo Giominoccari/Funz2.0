@@ -1,94 +1,162 @@
 # Funghi Map — Makefile
-# Comandi per gestione ambiente di sviluppo locale
+# Unified commands for local dev and beta. Behavior differs via .env values.
 
-# .env is loaded via shell in recipes that need it (Make's include can't
-# handle complex values like PEM keys with spaces). Helper:
+COMPOSE = docker compose -f infra/docker/docker-compose.yml --env-file .env
+
+# Load .env into shell (for host-side scripts like db-setup, geodata-import)
 LOAD_ENV = if [ -f .env ]; then while IFS= read -r _line || [ -n "$$_line" ]; do echo "$$_line" | grep -qE '^\s*($$|\#)' && continue; export "$$_line"; done < .env; fi
 
-.PHONY: up down restart build test db-setup status logs clean help docker-build deploy deploy-api deploy-worker cfn-deploy \
-       beta-up beta-down beta-restart beta-build beta-logs beta-status \
-       beta-db-up beta-db-down beta-db-shell beta-db-setup \
-       beta-redis-up beta-redis-down \
-       beta-app-up beta-app-down beta-app-restart beta-app-logs \
-       beta-setup beta-ssl-renew beta-geodata-import
+.PHONY: up down restart status logs app-logs \
+        build rebuild quick \
+        db-setup db-shell db-up db-down redis-up redis-down \
+        app-up app-down app-restart \
+        worker geodata-import geodata-check \
+        swift-build swift-test swift-test-scoring \
+        docker-build deploy deploy-api deploy-worker cfn-deploy \
+        clean clean-all \
+        beta-setup beta-ssl-renew beta-nginx-restart \
+        help
 
-# ─── Start everything ───────────────────────────────────────────────
-up: ## Start Postgres + Redis, setup DB, build and run Vapor server
-	@echo "▶ Starting Docker services..."
-	docker compose -f infra/docker/docker-compose.yml up -d --wait
+# ═══════════════════════════════════════════════════════════════════
+# Core — Start / Stop / Status
+# ═══════════════════════════════════════════════════════════════════
+
+up: ## Start all containers (postgres + redis + app) and setup DB
+	@mkdir -p Storage/tiles .cache
+	@echo "▶ Starting services..."
+	$(COMPOSE) up -d --wait
 	@echo "▶ Setting up database..."
-	@$(LOAD_ENV) && bash infra/scripts/db-setup.sh
-	@echo "▶ Building Swift project..."
-	swift build
-	@echo "▶ Starting Vapor server on port 8080..."
-	@$(LOAD_ENV) && swift run App serve --hostname 0.0.0.0 --port 8080
+	@$(LOAD_ENV) && DB_PASSWORD="$$DB_PASSWORD" DB_USER="$$DB_USER" DB_NAME="$$DB_NAME" bash infra/scripts/db-setup.sh
+	@echo "✔ All services running on http://127.0.0.1:8080"
 
-# ─── Stop everything ────────────────────────────────────────────────
-down: ## Stop Vapor (if backgrounded) and Docker services
-	@echo "▶ Stopping Docker services..."
-	docker compose -f infra/docker/docker-compose.yml down
-	@echo "✔ All services stopped."
+down: ## Stop all containers (preserves data)
+	@echo "▶ Stopping services..."
+	$(COMPOSE) down
+	@echo "✔ All services stopped. Data preserved."
 
-# ─── Restart with rebuild ───────────────────────────────────────────
-restart: down ## Stop everything, rebuild, and start again
-	@echo "▶ Rebuilding and restarting..."
-	$(MAKE) up
+restart: down up ## Stop and restart everything
 
-# ─── Build only ─────────────────────────────────────────────────────
-build: ## Build Swift project without running
-	swift build
+status: ## Show container status
+	@$(COMPOSE) ps
 
-# ─── Run tests ──────────────────────────────────────────────────────
-test: ## Run all tests in parallel
-	swift test --parallel
+logs: ## Tail all service logs
+	$(COMPOSE) logs -f
 
-test-scoring: ## Run ScoringEngine tests only
-	swift test --filter ScoringEngineTests
+app-logs: ## Tail app logs only
+	$(COMPOSE) logs -f app
 
-# ─── Database ───────────────────────────────────────────────────────
-db-setup: ## Run DB setup script (create DB, enable PostGIS + uuid-ossp)
-	@bash infra/scripts/db-setup.sh
+# ═══════════════════════════════════════════════════════════════════
+# Build — Docker image management
+# ═══════════════════════════════════════════════════════════════════
 
-db-shell: ## Open psql shell to dev database
-	psql postgres://funghimap:funghimap_dev@localhost:5432/funghimap_dev
+build: ## Build app Docker image without starting
+	$(COMPOSE) build app
+	@echo "✔ Image rebuilt"
 
-# ─── Docker services only ──────────────────────────────────────────
-services-up: ## Start only Postgres + Redis (no Vapor)
-	docker compose -f infra/docker/docker-compose.yml up -d --wait
+rebuild: ## Rebuild image and restart app (DB + Redis stay up)
+	$(COMPOSE) build app
+	$(COMPOSE) up -d app --wait --force-recreate
+	@echo "✔ App rebuilt and restarted"
 
-services-down: ## Stop only Docker services
-	docker compose -f infra/docker/docker-compose.yml down
+quick: ## Restart app without rebuild (for config/Public changes)
+	docker rm -f funz-app 2>/dev/null || true
+	$(COMPOSE) up -d app --wait
+	@echo "✔ App restarted with updated static assets"
 
-# ─── Status and logs ────────────────────────────────────────────────
-status: ## Show status of Docker services
-	@docker compose -f infra/docker/docker-compose.yml ps
+# ═══════════════════════════════════════════════════════════════════
+# Individual services
+# ═══════════════════════════════════════════════════════════════════
 
-logs: ## Tail Docker service logs
-	docker compose -f infra/docker/docker-compose.yml logs -f
+db-up: ## Start only PostgreSQL
+	$(COMPOSE) up -d postgres --wait
+	@echo "✔ PostgreSQL running on 127.0.0.1:5432"
 
-# ─── GeoData ─────────────────────────────────────────────────────────
+db-down: ## Stop only PostgreSQL (preserves data)
+	$(COMPOSE) stop postgres
+
+redis-up: ## Start only Redis
+	$(COMPOSE) up -d redis --wait
+	@echo "✔ Redis running on 127.0.0.1:6379"
+
+redis-down: ## Stop only Redis
+	$(COMPOSE) stop redis
+
+app-up: ## Start only the app container
+	$(COMPOSE) up -d app --wait
+	@echo "✔ App running on 127.0.0.1:8080"
+
+app-down: ## Stop only the app container
+	$(COMPOSE) stop app
+
+app-restart: ## Restart only the app (DB + Redis stay up)
+	$(COMPOSE) stop app
+	$(COMPOSE) up -d app --wait
+	@echo "✔ App restarted"
+
+# ═══════════════════════════════════════════════════════════════════
+# Database
+# ═══════════════════════════════════════════════════════════════════
+
+db-setup: ## Run DB setup (create DB, enable PostGIS + uuid-ossp)
+	@$(LOAD_ENV) && DB_PASSWORD="$$DB_PASSWORD" DB_USER="$$DB_USER" DB_NAME="$$DB_NAME" bash infra/scripts/db-setup.sh
+
+db-shell: ## Open psql shell to the database
+	@$(LOAD_ENV) && psql "postgres://$$DB_USER:$$DB_PASSWORD@localhost:5432/$$DB_NAME"
+
+# ═══════════════════════════════════════════════════════════════════
+# Pipeline
+# ═══════════════════════════════════════════════════════════════════
+
+worker: ## Run map pipeline inside the app container
+	docker exec funz-app /app/App worker --bbox italy
+
+worker-trentino: ## Run map pipeline (Trentino only, faster)
+	docker exec funz-app /app/App worker --bbox trentino
+
 GEODATA_VENV = .venv/geodata
 GEODATA_PYTHON = $(GEODATA_VENV)/bin/python3
 
-$(GEODATA_VENV)/bin/hda: ## (internal) Create venv with hda installed
+$(GEODATA_VENV)/bin/hda:
 	@echo "▶ Creating Python venv for WEkEO downloads..."
 	python3 -m venv $(GEODATA_VENV)
 	$(GEODATA_VENV)/bin/pip install --quiet --upgrade pip
 	$(GEODATA_VENV)/bin/pip install --quiet hda
-	@echo "  ✔ venv ready at $(GEODATA_VENV) with hda installed"
+	@echo "  ✔ venv ready at $(GEODATA_VENV)"
 
-geodata-import: $(GEODATA_VENV)/bin/hda ## Download and import geodata into PostGIS (WEkEO + ISRIC)
-	@$(LOAD_ENV) && $(GEODATA_PYTHON) infra/scripts/import-geodata.py
+geodata-import: $(GEODATA_VENV)/bin/hda ## Download and import geodata into PostGIS
+	@$(LOAD_ENV) && \
+		DATABASE_URL="postgres://$$DB_USER:$$DB_PASSWORD@localhost:5432/$$DB_NAME" \
+		PYTHONUNBUFFERED=1 \
+		$(GEODATA_PYTHON) infra/scripts/import-geodata.py
 
 geodata-check: ## Verify raster tables exist in PostGIS
-	@$(LOAD_ENV) && psql "$$DATABASE_URL" \
-		-c "SELECT 'corine_landcover' AS t, count(*) FROM corine_landcover UNION ALL SELECT 'esdac_soil', count(*) FROM esdac_soil UNION ALL SELECT 'copernicus_dem', count(*) FROM copernicus_dem UNION ALL SELECT 'dem_aspect', count(*) FROM dem_aspect;"
+	@$(LOAD_ENV) && psql "postgres://$$DB_USER:$$DB_PASSWORD@localhost:5432/$$DB_NAME" \
+		-c "SELECT 'corine_landcover' AS t, count(*) FROM corine_landcover UNION ALL SELECT 'tree_cover_density', count(*) FROM tree_cover_density UNION ALL SELECT 'dominant_leaf_type', count(*) FROM dominant_leaf_type UNION ALL SELECT 'esdac_soil', count(*) FROM esdac_soil UNION ALL SELECT 'copernicus_dem', count(*) FROM copernicus_dem UNION ALL SELECT 'dem_aspect', count(*) FROM dem_aspect;"
 
-# ─── Deploy (ECS Fargate) ──────────────────────────────────
-docker-build: ## Build Docker image locally (linux/amd64)
+redis-flush: ## Flush all Redis data (weather cache etc.)
+	docker exec funz-redis redis-cli FLUSHALL
+
+# ═══════════════════════════════════════════════════════════════════
+# Swift — Native build/test (without Docker)
+# ═══════════════════════════════════════════════════════════════════
+
+swift-build: ## Build Swift project natively
+	swift build
+
+swift-test: ## Run all tests in parallel
+	swift test --parallel
+
+swift-test-scoring: ## Run ScoringEngine tests only
+	swift test --filter ScoringEngineTests
+
+# ═══════════════════════════════════════════════════════════════════
+# Deploy — AWS ECS Fargate (production)
+# ═══════════════════════════════════════════════════════════════════
+
+docker-build: ## Build Docker image for linux/amd64
 	docker build --platform linux/amd64 -f infra/docker/Dockerfile -t funghi-map:latest .
 
-deploy: ## Build, push to ECR, deploy API + worker to ECS Fargate
+deploy: ## Build, push to ECR, deploy API + worker to ECS
 	@bash infra/scripts/deploy.sh
 
 deploy-api: ## Deploy API service only
@@ -97,7 +165,7 @@ deploy-api: ## Deploy API service only
 deploy-worker: ## Update worker task definition only
 	@bash infra/scripts/deploy.sh --worker-only
 
-cfn-deploy: ## Deploy/update CloudFormation stack (requires parameters file)
+cfn-deploy: ## Deploy/update CloudFormation stack
 	@echo "▶ Deploying CloudFormation stack..."
 	aws cloudformation deploy \
 		--template-file infra/cloudformation/stack.yaml \
@@ -105,100 +173,25 @@ cfn-deploy: ## Deploy/update CloudFormation stack (requires parameters file)
 		--capabilities CAPABILITY_NAMED_IAM \
 		--parameter-overrides file://infra/cloudformation/params.json
 
-# ─── Clean ──────────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════
+# Clean
+# ═══════════════════════════════════════════════════════════════════
+
 clean: ## Remove Swift build artifacts
 	swift package clean
 	@echo "✔ Build artifacts cleaned."
 
-clean-all: clean ## Clean build artifacts + Docker volumes (destroys local DB data)
-	@echo "⚠  This will destroy local database data."
-	docker compose -f infra/docker/docker-compose.yml down -v
+clean-all: clean ## Clean build artifacts + Docker volumes (DESTROYS DB data)
+	@echo "⚠  This will destroy database data."
+	@read -p "Are you sure? [y/N] " confirm && [ "$$confirm" = "y" ] || exit 1
+	$(COMPOSE) down -v
 	@echo "✔ All cleaned."
 
 # ═══════════════════════════════════════════════════════════════════
-# Beta Server (self-hosted Mac)
-# Nginx + certbot run on host; app, DB, Redis in Docker.
+# Beta infrastructure — Only relevant on the beta Mac
 # ═══════════════════════════════════════════════════════════════════
-BETA_COMPOSE = docker compose -f infra/docker/docker-compose.beta.yml --env-file .env.beta
 
-# ─── Beta: All services ──────────────────────────────────────────
-beta-up: ## Start all beta services (DB + Redis + App)
-	@echo "▶ Starting beta services..."
-	$(BETA_COMPOSE) up -d --wait
-	@echo "▶ Setting up database..."
-	@DB_HOST=127.0.0.1 DB_USER=funghimap DB_NAME=funghimap_beta DB_PASSWORD=funghimap_beta bash infra/scripts/db-setup.sh
-	@echo "✔ Beta server running on http://127.0.0.1:8080"
-
-beta-down: ## Stop all beta services (preserves data volumes)
-	@echo "▶ Stopping beta services..."
-	$(BETA_COMPOSE) down
-	@echo "✔ Beta services stopped. Data volumes preserved."
-
-beta-restart: ## Restart all beta services
-	$(MAKE) beta-down
-	$(MAKE) beta-up
-
-beta-status: ## Show status of all beta containers
-	@$(BETA_COMPOSE) ps
-
-beta-logs: ## Tail logs for all beta services
-	$(BETA_COMPOSE) logs -f
-
-# ─── Beta: Database only ─────────────────────────────────────────
-beta-db-up: ## Start only PostgreSQL
-	$(BETA_COMPOSE) up -d postgres --wait
-	@echo "✔ PostgreSQL running on 127.0.0.1:5432"
-
-beta-db-down: ## Stop only PostgreSQL (preserves data)
-	$(BETA_COMPOSE) stop postgres
-
-beta-db-shell: ## Open psql shell to beta database
-	psql postgres://funghimap:funghimap_beta@127.0.0.1:5432/funghimap_beta
-
-beta-db-setup: ## Run DB setup on beta (PostGIS + uuid-ossp)
-	@DB_HOST=127.0.0.1 DB_USER=funghimap DB_NAME=funghimap_beta DB_PASSWORD=funghimap_beta bash infra/scripts/db-setup.sh
-
-# ─── Beta: Redis only ────────────────────────────────────────────
-beta-redis-up: ## Start only Redis
-	$(BETA_COMPOSE) up -d redis --wait
-	@echo "✔ Redis running on 127.0.0.1:6379"
-
-beta-redis-down: ## Stop only Redis
-	$(BETA_COMPOSE) stop redis
-
-# ─── Beta: App only (requires DB + Redis running) ────────────────
-beta-app-up: ## Start only the Vapor app container
-	$(BETA_COMPOSE) up -d app --wait
-	@echo "✔ Vapor app running on 127.0.0.1:8080"
-
-beta-app-down: ## Stop only the Vapor app container
-	$(BETA_COMPOSE) stop app
-
-beta-app-restart: ## Restart only the Vapor app (DB + Redis stay up)
-	$(BETA_COMPOSE) stop app
-	$(BETA_COMPOSE) up -d app --wait
-	@echo "✔ Vapor app restarted"
-
-beta-app-logs: ## Tail logs for the Vapor app only
-	$(BETA_COMPOSE) logs -f app
-
-# ─── Beta: Build & Deploy ────────────────────────────────────────
-beta-build: ## Rebuild the Vapor Docker image without starting
-	$(BETA_COMPOSE) build app
-	@echo "✔ Beta image rebuilt"
-
-beta-rebuild: ## Rebuild image and restart app only (DB + Redis stay up)
-	$(BETA_COMPOSE) build app
-	$(BETA_COMPOSE) up -d app --wait --force-recreate
-	@echo "✔ App rebuilt and restarted"
-
-beta-quick: ## Quick redeploy: static assets only (no Swift recompile). Use when only config/ or Public/ changed.
-	docker rm -f funz-beta-app 2>/dev/null || true
-	$(BETA_COMPOSE) up -d app --wait
-	@echo "✔ App restarted with updated static assets (no rebuild)"
-
-# ─── Beta: Infrastructure ────────────────────────────────────────
-beta-setup: ## One-time setup: install nginx, certbot, DuckDNS (run on beta Mac)
+beta-setup: ## One-time setup: install nginx, certbot, DuckDNS (beta Mac only)
 	@bash infra/beta/setup.sh
 
 beta-ssl-renew: ## Manually trigger certbot renewal
@@ -207,21 +200,10 @@ beta-ssl-renew: ## Manually trigger certbot renewal
 beta-nginx-restart: ## Restart nginx
 	brew services restart nginx
 
-LOAD_ENV_BETA = if [ -f .env.beta ]; then while IFS= read -r _line || [ -n "$$_line" ]; do echo "$$_line" | grep -qE '^\s*($$|\#)' && continue; export "$$_line"; done < .env.beta; fi
+# ═══════════════════════════════════════════════════════════════════
+# Help
+# ═══════════════════════════════════════════════════════════════════
 
-beta-geodata-import: $(GEODATA_VENV)/bin/hda ## Import geodata into beta PostGIS
-	@$(LOAD_ENV_BETA) && \
-		DATABASE_URL=postgres://funghimap:funghimap_beta@127.0.0.1:5432/funghimap_beta \
-		PYTHONUNBUFFERED=1 \
-		$(GEODATA_PYTHON) infra/scripts/import-geodata.py
-
-beta-clean: ## Remove beta Docker volumes (DESTROYS beta data)
-	@echo "⚠  This will destroy beta database data."
-	@read -p "Are you sure? [y/N] " confirm && [ "$$confirm" = "y" ] || exit 1
-	$(BETA_COMPOSE) down -v
-	@echo "✔ Beta volumes removed."
-
-# ─── Help ───────────────────────────────────────────────────────────
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
-		awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
+		awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'

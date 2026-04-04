@@ -10,7 +10,8 @@ Architettura di riferimento: `docs/architecture.md` (non duplicare qui).
 - **Cache / Queue**: Redis (Upstash free tier)
 - **Storage**: AWS S3 + CloudFront (tile mappe e foto utenti)
 - **Meteo**: Open-Meteo API (gratuita, no API key)
-- **Deploy**: AWS ECS Fargate — 2 container: `api` (sempre attivo) + `worker` (pipeline on-demand)
+- **Deploy locale/beta**: Docker Compose — 3 container: `postgres` + `redis` + `app`
+- **Deploy prod**: AWS ECS Fargate — 2 task: `api` (sempre attivo) + `worker` (pipeline on-demand)
 
 ## Struttura del progetto
 ```
@@ -41,7 +42,7 @@ config/
 docs/
   architecture.md   # Documento architetturale completo
 infra/
-  docker/           # Dockerfile, docker-compose.yml, docker-compose.beta.yml
+  docker/           # Dockerfile, docker-compose.yml (unified for local + beta)
   scripts/          # db-setup.sh, deploy.sh, import-geodata.py
   nginx/            # Nginx reverse proxy config (beta server)
   beta/             # Beta server setup (certbot, DuckDNS)
@@ -94,13 +95,28 @@ infra/
 - S3 tile premium: URL firmati con scadenza 1h, mai bucket pubblico
 - Pre-commit hook: bloccare commit con pattern `password:`, `secret:`, chiavi PEM
 
+## Ambienti
+- **Local + Beta**: stessi 3 container Docker (postgres, redis, app), stesso `.env` (chiavi uguali, valori diversi)
+- **Prod**: ECS Fargate, stessa Docker image, config via AWS Secrets Manager
+- Su beta: `RESTART_POLICY=unless-stopped` nel `.env`, nginx + certbot su host
+
 ## Comandi frequenti
 ```bash
-swift build                          # Build progetto
-swift test --parallel                # Tutti i test in parallelo
-swift test --filter ScoringEngineTests  # Test specifici
-vapor run serve --port 8080          # Avvio server locale
-make services-up                     # Postgres + Redis locali (Docker)
+make up                              # Start postgres + redis + app (Docker)
+make down                            # Stop tutto
+make rebuild                         # Rebuild immagine app e restart
+make quick                           # Restart app senza rebuild (per config/Public)
+make worker                          # Esegui pipeline mappe (dentro container)
+make worker-trentino                 # Pipeline solo Trentino (più veloce)
+make geodata-import                  # Import geodata in PostGIS (Python, su host)
+make geodata-check                   # Verifica tabelle raster
+make db-setup                        # Setup DB (PostGIS + uuid-ossp)
+make db-shell                        # Shell psql
+make redis-flush                     # Flush cache Redis
+make swift-build                     # Build Swift nativo (senza Docker)
+make swift-test                      # Test in parallelo
+make logs                            # Tail tutti i log
+make app-logs                        # Tail solo log app
 ```
 
 ## Cosa NON fare
