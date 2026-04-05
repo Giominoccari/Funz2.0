@@ -147,7 +147,9 @@
                 return `/map/dynamic-tiles/${date}/{z}/{x}/{y}?min_score=${score.toFixed(2)}`;
             }
             if (authToken) {
-                return window.location.origin + `/map/tiles/${date}/{z}/{x}/{y}`;
+                // Include token as query param so WebView image requests are authenticated
+                // (WebView cannot set Authorization headers on tile image requests)
+                return `/map/tiles/${date}/{z}/{x}/{y}?token=${encodeURIComponent(authToken)}`;
             }
             return `/map/dev-tiles/${date}/{z}/{x}/{y}`;
         }
@@ -196,18 +198,6 @@
             minZoom: 6,
             maxZoom: 12
         });
-
-        // ── If using auth token, add it to tile requests via transformRequest ──
-        if (authToken) {
-            map.setTransformRequest((url, resourceType) => {
-                if (resourceType === 'Tile' && url.startsWith(window.location.origin)) {
-                    return {
-                        url: url,
-                        headers: { 'Authorization': 'Bearer ' + authToken }
-                    };
-                }
-            });
-        }
 
         // ── Funghi overlay ──
         function loadOverlay(date, minScore) {
@@ -494,16 +484,9 @@
             };
         })();
 
-        // Called by native after token refresh — updates auth and reloads tiles with correct date
+        // Called by native after token refresh — updates token and reloads tiles with correct date
         window.setMapAuth = function(token, date) {
-            if (token) {
-                authToken = token;
-                map.setTransformRequest((url, resourceType) => {
-                    if (resourceType === 'Tile' && url.startsWith(window.location.origin)) {
-                        return { url, headers: { 'Authorization': 'Bearer ' + token } };
-                    }
-                });
-            }
+            if (token) authToken = token;
             if (date) loadOverlay(date);
         };
 

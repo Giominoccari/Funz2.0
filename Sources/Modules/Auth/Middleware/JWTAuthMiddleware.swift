@@ -3,13 +3,19 @@ import Vapor
 
 struct JWTAuthMiddleware: AsyncMiddleware, Sendable {
     func respond(to request: Request, chainingTo next: AsyncResponder) async throws -> Response {
-        guard let bearer = request.headers.bearerAuthorization else {
+        // Accept token from Authorization header or ?token= query param (used by WebView tile requests)
+        let rawToken: String
+        if let bearer = request.headers.bearerAuthorization {
+            rawToken = bearer.token
+        } else if let queryToken = request.query[String.self, at: "token"], !queryToken.isEmpty {
+            rawToken = queryToken
+        } else {
             throw Abort(.unauthorized, reason: "Missing authorization header.")
         }
 
         let payload: FunghiJWTPayload
         do {
-            payload = try await request.application.jwtKeys.verify(bearer.token, as: FunghiJWTPayload.self)
+            payload = try await request.application.jwtKeys.verify(rawToken, as: FunghiJWTPayload.self)
         } catch {
             throw Abort(.unauthorized, reason: "Invalid or expired token.")
         }
