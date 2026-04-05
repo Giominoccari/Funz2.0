@@ -144,7 +144,7 @@
         function tileURLTemplate(date, minScore) {
             const score = minScore || 0;
             if (score > 0) {
-                return `/map/dynamic-tiles/${date}/{z}/{x}/{y}?min_score=${score.toFixed(2)}`;
+                return `/map/dynamic-tiles/${date}/{z}/{x}/{y}?min_score=${score.toFixed(2)}&token=${encodeURIComponent(authToken)}`;
             }
             if (authToken) {
                 // Include token as query param so WebView image requests are authenticated
