@@ -49,7 +49,7 @@ struct ScoreRaster: Sendable {
             grid[row * width + col] = Float(r.score)
         }
 
-        self.data = grid
+        self.data = ScoreRaster.gaussianBlur(grid: grid, width: width, height: height, radius: 2, sigma: 1.0)
     }
 
     // MARK: - Binary persistence
@@ -160,6 +160,56 @@ struct ScoreRaster: Sendable {
             }
         }
         return false
+    }
+
+    // MARK: - Gaussian blur
+
+    /// Applies a Gaussian blur to the score grid.
+    /// - Data cells blend with neighbors → smooths CORINE class boundaries.
+    /// - No-data cells (-1) near data get filled with a weighted average → feathers forest edges.
+    /// - No-data cells with no valid neighbor within radius remain -1 → no overlay.
+    private static func gaussianBlur(
+        grid: [Float], width: Int, height: Int,
+        radius: Int, sigma: Double
+    ) -> [Float] {
+        // Precompute Gaussian kernel weights for offsets -radius...radius
+        var kernel = [Double](repeating: 0, count: 2 * radius + 1)
+        var kernelSum = 0.0
+        for i in 0...(2 * radius) {
+            let d = Double(i - radius)
+            kernel[i] = exp(-(d * d) / (2 * sigma * sigma))
+            kernelSum += kernel[i]
+        }
+        for i in kernel.indices { kernel[i] /= kernelSum }
+
+        var out = [Float](repeating: -1, count: width * height)
+
+        for row in 0..<height {
+            for col in 0..<width {
+                var weightedSum = 0.0
+                var totalWeight = 0.0
+
+                for dr in -radius...radius {
+                    for dc in -radius...radius {
+                        let r2 = row + dr
+                        let c2 = col + dc
+                        guard r2 >= 0, r2 < height, c2 >= 0, c2 < width else { continue }
+                        let v = grid[r2 * width + c2]
+                        guard v >= 0 else { continue }  // skip no-data neighbors
+                        let w = kernel[dr + radius] * kernel[dc + radius]
+                        weightedSum += Double(v) * w
+                        totalWeight += w
+                    }
+                }
+
+                if totalWeight > 0 {
+                    out[row * width + col] = Float(weightedSum / totalWeight)
+                }
+                // else: remains -1 (no valid neighbor within radius)
+            }
+        }
+
+        return out
     }
 
     /// Bilinear interpolation sample. Returns nil if outside data coverage.

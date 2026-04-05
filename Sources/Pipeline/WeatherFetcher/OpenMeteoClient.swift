@@ -73,7 +73,7 @@ struct OpenMeteoClient: WeatherClient {
                     )
                     let delay: Int
                     if status == 429 {
-                        delay = 60_000 + Int.random(in: 0...5_000)
+                        delay = Self.rateLimitDelay(body: errorText)
                     } else {
                         let baseDelay = retryBaseDelayMs * (1 << attempt)
                         delay = baseDelay + Int.random(in: 0...(baseDelay / 2))
@@ -195,11 +195,9 @@ struct OpenMeteoClient: WeatherClient {
                         statusCode: UInt(status), latitude: rounded[0].lat, longitude: rounded[0].lon
                     )
 
-                    // Open-Meteo 429 = "Minutely API request limit exceeded. Try again in one minute."
-                    // Wait 60s on 429 (per-minute limit), exponential backoff on 5xx
                     let delay: Int
                     if status == 429 {
-                        delay = 60_000 + Int.random(in: 0...5_000)
+                        delay = Self.rateLimitDelay(body: errorText)
                     } else {
                         let baseDelay = retryBaseDelayMs * (1 << attempt)
                         delay = baseDelay + Int.random(in: 0...(baseDelay / 2))
@@ -269,6 +267,29 @@ struct OpenMeteoClient: WeatherClient {
     }
 
     // MARK: - Helpers
+
+    /// Returns the appropriate retry delay in milliseconds for a 429 response.
+    /// - Minutely limit: wait ~60s
+    /// - Hourly limit: wait until the start of the next hour
+    private static func rateLimitDelay(body: String) -> Int {
+        if body.contains("Hourly") {
+            // Wait until the next hour boundary (e.g. 8:47 → wait 13 minutes)
+            var cal = Calendar(identifier: .gregorian)
+            cal.timeZone = TimeZone(identifier: "UTC")!
+            let now = Date()
+            guard let nextHour = cal.nextDate(
+                after: now,
+                matching: DateComponents(minute: 0, second: 0),
+                matchingPolicy: .nextTime
+            ) else {
+                return 60_000 + Int.random(in: 0...5_000)
+            }
+            let msUntilNextHour = Int(nextHour.timeIntervalSince(now) * 1000)
+            return msUntilNextHour + Int.random(in: 0...5_000)
+        }
+        // Minutely limit — wait ~60s
+        return 60_000 + Int.random(in: 0...5_000)
+    }
 
     /// Compute daily mean soil temperature from hourly data.
     /// Returns one value per day in `daily.time` order. Falls back to air temp if hourly data missing.

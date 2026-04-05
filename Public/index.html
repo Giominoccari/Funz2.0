@@ -494,6 +494,19 @@
             };
         })();
 
+        // Called by native after token refresh — updates auth and reloads tiles with correct date
+        window.setMapAuth = function(token, date) {
+            if (token) {
+                authToken = token;
+                map.setTransformRequest((url, resourceType) => {
+                    if (resourceType === 'Tile' && url.startsWith(window.location.origin)) {
+                        return { url, headers: { 'Authorization': 'Bearer ' + token } };
+                    }
+                });
+            }
+            if (date) loadOverlay(date);
+        };
+
         // ── Init ──
         map.on('load', () => {
             loadOverlay(currentDate);
