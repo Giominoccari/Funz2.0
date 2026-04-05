@@ -12,10 +12,9 @@ struct MapController: RouteCollection, Sendable {
         // Tile endpoint: JWT auth + subscription entitlements for zoom gating
         let protectedMap = map.grouped(JWTAuthMiddleware(), SubscriptionMiddleware())
         protectedMap.get("tiles", ":date", ":z", ":x", ":y", use: getTile)
+        protectedMap.get("dynamic-tiles", ":date", ":z", ":x", ":y", use: getDynamicTile)
         // Dev-only: unauthenticated tile access (local files only, no S3)
         map.get("dev-tiles", ":date", ":z", ":x", ":y", use: getDevTile)
-        // Dynamic tiles: on-the-fly rendering with min_score threshold
-        map.get("dynamic-tiles", ":date", ":z", ":x", ":y", use: getDynamicTile)
         // Score point lookup
         map.get("score", use: getScore)
         // Dates listing remains public
@@ -100,9 +99,6 @@ struct MapController: RouteCollection, Sendable {
 
     @Sendable
     func getDynamicTile(req: Request) async throws -> Response {
-        guard req.application.environment != .production else {
-            throw Abort(.notFound)
-        }
         guard let date = req.parameters.get("date"),
               let zStr = req.parameters.get("z"), let z = Int(zStr),
               let xStr = req.parameters.get("x"), let x = Int(xStr),
@@ -114,7 +110,13 @@ struct MapController: RouteCollection, Sendable {
             throw Abort(.badRequest, reason: "Zoom must be between 6 and 12")
         }
 
-        let minScore = Double(req.query[String.self, at: "min_score"] ?? "0") ?? 0
+        let maxZoom = req.planEntitlements.maxZoom
+        guard z <= maxZoom else {
+            throw Abort(.forbidden, reason: "Zoom level \(z) requires a higher subscription tier (your max: \(maxZoom)).")
+        }
+
+        let rawMinScore = Double(req.query[String.self, at: "min_score"] ?? "0") ?? 0
+        let minScoreFraction = min(max(rawMinScore, 0.0), 1.0)
 
         let basePath = req.application.directory.workingDirectory + "Storage/tiles"
         guard let cached = await RasterCache.shared.get(date: date, basePath: basePath) else {
@@ -122,6 +124,16 @@ struct MapController: RouteCollection, Sendable {
         }
         let raster = cached.raster
         let scoreRange = cached.scoreRange
+
+        // Translate the 0–1 slider fraction into an absolute score threshold
+        // relative to today's actual data range, so the filter is meaningful
+        // regardless of season (e.g. 0.5 = "top half of today's scores").
+        let minScore: Double
+        if let range = scoreRange {
+            minScore = range.min + minScoreFraction * (range.max - range.min)
+        } else {
+            minScore = minScoreFraction
+        }
 
         let size = TileMath.tileSize
         var pixels = [PNG.RGBA<UInt8>](repeating: .init(0, 0, 0, 0), count: size * size)
@@ -157,7 +169,7 @@ struct MapController: RouteCollection, Sendable {
 
         var headers = HTTPHeaders()
         headers.add(name: .contentType, value: "image/png")
-        headers.add(name: .cacheControl, value: "public, max-age=300")
+        headers.add(name: .cacheControl, value: "public, max-age=3600")
         return Response(status: .ok, headers: headers, body: .init(data: Data(pngData)))
     }
 
