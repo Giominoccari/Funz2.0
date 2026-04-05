@@ -39,8 +39,11 @@ restart: down up ## Stop and restart everything
 status: ## Show container status
 	@$(COMPOSE) ps
 
-logs: ## Tail all service logs
+logs: ## Tail all service logs (from beginning)
 	$(COMPOSE) logs -f
+
+logs-live: ## Tail only new log lines (skip history)
+	$(COMPOSE) logs -f --since=1s
 
 app-logs: ## Tail app logs only
 	$(COMPOSE) logs -f app
