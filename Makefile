@@ -10,7 +10,7 @@ LOAD_ENV = if [ -f .env ]; then while IFS= read -r _line || [ -n "$$_line" ]; do
         build rebuild quick \
         db-setup db-shell db-up db-down redis-up redis-down \
         app-up app-down app-restart \
-        worker geodata-import geodata-check \
+        worker geodata-import geodata-import-boundary geodata-check \
         swift-build swift-test swift-test-scoring \
         docker-build deploy deploy-api deploy-worker cfn-deploy \
         clean clean-all \
@@ -126,11 +126,17 @@ $(GEODATA_VENV)/bin/hda:
 	$(GEODATA_VENV)/bin/pip install --quiet hda
 	@echo "  ✔ venv ready at $(GEODATA_VENV)"
 
-geodata-import: $(GEODATA_VENV)/bin/hda ## Download and import geodata into PostGIS
+geodata-import: $(GEODATA_VENV)/bin/hda ## Download and import geodata into PostGIS (pass DATASETS=name to import one)
 	@$(LOAD_ENV) && \
 		DATABASE_URL="postgres://$$DB_USER:$$DB_PASSWORD@localhost:5432/$$DB_NAME" \
 		PYTHONUNBUFFERED=1 \
-		$(GEODATA_PYTHON) infra/scripts/import-geodata.py
+		$(GEODATA_PYTHON) infra/scripts/import-geodata.py $(DATASETS)
+
+geodata-import-boundary: $(GEODATA_VENV)/bin/hda ## Import only Italy boundary polygon (fast, no WEkEO needed)
+	@$(LOAD_ENV) && \
+		DATABASE_URL="postgres://$$DB_USER:$$DB_PASSWORD@localhost:5432/$$DB_NAME" \
+		PYTHONUNBUFFERED=1 \
+		$(GEODATA_PYTHON) infra/scripts/import-geodata.py italy_boundary
 
 geodata-check: ## Verify raster tables exist in PostGIS
 	@$(LOAD_ENV) && psql "postgres://$$DB_USER:$$DB_PASSWORD@localhost:5432/$$DB_NAME" \
