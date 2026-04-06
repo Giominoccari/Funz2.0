@@ -9,16 +9,19 @@ struct MapController: RouteCollection, Sendable {
 
     func boot(routes: RoutesBuilder) throws {
         let map = routes.grouped("map")
-        // Tile endpoint: JWT auth + subscription entitlements for zoom gating
         let protectedMap = map.grouped(JWTAuthMiddleware(), SubscriptionMiddleware())
+        // Historical tiles
         protectedMap.get("tiles", ":date", ":z", ":x", ":y", use: getTile)
         protectedMap.get("dynamic-tiles", ":date", ":z", ":x", ":y", use: getDynamicTile)
+        // Forecast tiles (served from Storage/tiles/forecast/{date}/)
+        protectedMap.get("forecast-tiles", ":date", ":z", ":x", ":y", use: getForecastTile)
         // Dev-only: unauthenticated tile access (local files only, no S3)
         map.get("dev-tiles", ":date", ":z", ":x", ":y", use: getDevTile)
         // Score point lookup
         map.get("score", use: getScore)
-        // Dates listing remains public
+        // Dates listings (public)
         map.get("dates", use: getDates)
+        map.get("forecast-dates", use: getForecastDates)
     }
 
     // MARK: - GET /map/tiles/:date/:z/:x/:y
@@ -239,6 +242,56 @@ struct MapController: RouteCollection, Sendable {
             .sorted()
             .reversed()
             .map { $0 }
+    }
+
+    // MARK: - GET /map/forecast-tiles/:date/:z/:x/:y
+
+    @Sendable
+    func getForecastTile(req: Request) async throws -> Response {
+        guard let date = req.parameters.get("date"),
+              let zStr = req.parameters.get("z"), let z = Int(zStr),
+              let xStr = req.parameters.get("x"), let x = Int(xStr),
+              let yStr = req.parameters.get("y"), let y = Int(yStr)
+        else { throw Abort(.badRequest, reason: "Invalid tile parameters") }
+
+        guard (6...12).contains(z) else {
+            throw Abort(.badRequest, reason: "Zoom must be between 6 and 12")
+        }
+        let maxZoom = req.planEntitlements.maxZoom
+        guard z <= maxZoom else {
+            throw Abort(.forbidden, reason: "Zoom level \(z) requires a higher subscription tier")
+        }
+
+        let localPath = req.application.directory.workingDirectory
+            + "Storage/tiles/forecast/\(date)/\(z)/\(x)/\(y).png"
+
+        if FileManager.default.fileExists(atPath: localPath) {
+            return try await req.fileio.asyncStreamFile(at: localPath)
+        }
+
+        if let s3Config = self.loadS3Config(req: req) {
+            let key = "forecast/\(date)/\(z)/\(x)/\(y).png"
+            let signedURL = try await self.presignedS3URL(
+                bucket: s3Config.bucket, key: key, region: s3Config.region, req: req
+            )
+            return req.redirect(to: signedURL, redirectType: .temporary)
+        }
+
+        throw Abort(.notFound, reason: "Forecast tile not found for \(date)")
+    }
+
+    // MARK: - GET /map/forecast-dates
+
+    @Sendable
+    func getForecastDates(req: Request) async throws -> [String] {
+        let forecastDir = req.application.directory.workingDirectory + "Storage/tiles/forecast"
+        guard FileManager.default.fileExists(atPath: forecastDir) else { return [] }
+        let contents = (try? FileManager.default.contentsOfDirectory(atPath: forecastDir)) ?? []
+        let dateFormatter = DateFormatter()
+        dateFormatter.dateFormat = "yyyy-MM-dd"
+        return contents
+            .filter { dateFormatter.date(from: $0) != nil }
+            .sorted()
     }
 
     // MARK: - S3 Helpers

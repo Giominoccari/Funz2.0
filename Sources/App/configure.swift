@@ -66,12 +66,16 @@ func configure(_ app: Application) async throws {
     try MapModule.configure(app)
     try AdminModule.configure(app)
     try WeatherModule.configure(app)
+    try POIModule.configure(app)
 
     // Migrations (auto-migrate in development)
     app.migrations.add(CreateRasterExtensions())
     app.migrations.add(CreateWeatherObservations())
     app.migrations.add(AddSoilTempColumn())
     app.migrations.add(CreateItalyBoundary())
+    app.migrations.add(AddDeviceToken())
+    app.migrations.add(CreatePOI())
+    app.migrations.add(CreatePOINotification())
     try await app.autoMigrate()
 
     // Validate PostGIS raster data (Copernicus DEM required for altitude)
@@ -98,6 +102,7 @@ func configure(_ app: Application) async throws {
     // Commands
     app.asyncCommands.use(WorkerCommand(), as: "worker")
     app.asyncCommands.use(BenchGeoCommand(), as: "bench-geo")
+    app.asyncCommands.use(ForecastEvaluatorCommand(), as: "evaluate")
 
     // Routes
     try routes(app)

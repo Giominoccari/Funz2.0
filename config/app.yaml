@@ -54,9 +54,12 @@ subscription:
       maxZoom: 9
       historyDays: 0
       features: []
+      maxPOIs: 1
     pro:
       maxZoom: 12
       historyDays: 90
       features:
         - "hd_tiles"
         - "historical_data"
+        - "forecast_notifications"
+      maxPOIs: 10

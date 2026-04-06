@@ -11,6 +11,7 @@ struct UserController: RouteCollection, Sendable {
 
         user.get("profile", use: getProfile)
         user.put("profile", use: updateProfile)
+        user.post("device-token", use: registerDeviceToken)
         user.get("photos", use: listPhotos)
         user.post("photos", use: createPhoto)
         user.delete("photos", ":photoID", use: deletePhoto)
@@ -62,6 +63,28 @@ struct UserController: RouteCollection, Sendable {
         Self.logger.info("Profile updated", metadata: ["user_id": "\(userID)"])
 
         return UserDTO.ProfileResponse(user: user)
+    }
+
+    // MARK: - POST /user/device-token
+
+    private struct DeviceTokenRequest: Content {
+        let deviceToken: String
+    }
+
+    @Sendable
+    private func registerDeviceToken(req: Request) async throws -> HTTPStatus {
+        let payload = try req.jwtPayload
+        guard let userID = UUID(uuidString: payload.sub.value) else {
+            throw Abort(.unauthorized)
+        }
+        let input = try req.content.decode(DeviceTokenRequest.self)
+        guard let user = try await User.find(userID, on: req.db) else {
+            throw Abort(.notFound)
+        }
+        user.deviceToken = input.deviceToken
+        try await user.save(on: req.db)
+        Self.logger.info("Device token registered", metadata: ["user_id": "\(userID)"])
+        return .noContent
     }
 
     // MARK: - GET /user/photos

@@ -205,7 +205,8 @@
             center: [initLon, initLat],
             zoom: initZoom,
             minZoom: 6,
-            maxZoom: 12
+            maxZoom: 12,
+            maxBounds: [[5.5, 35.5], [20.0, 48.0]]
         });
 
         // ── Funghi overlay ──
@@ -493,6 +494,56 @@
         window.setMapAuth = function(token, date) {
             if (token) authToken = token;
             if (date) loadOverlay(date);
+        };
+
+        // ── Forecast overlay ──
+        // Called by MapBridge.loadForecastDate(_:) — switches to forecast tile layer
+        let currentMode = 'historical'; // 'historical' | 'forecast'
+        let currentForecastDate = null;
+
+        function forecastTileURLTemplate(date) {
+            if (authToken) {
+                return `/map/forecast-tiles/${date}/{z}/{x}/{y}?token=${encodeURIComponent(authToken)}`;
+            }
+            return `/map/forecast-tiles/${date}/{z}/{x}/{y}`;
+        }
+
+        window.loadForecastOverlay = function(date) {
+            if (!date) return;
+            currentMode = 'forecast';
+            currentForecastDate = date;
+
+            const sourceId = 'funghi-tiles';
+            const layerId = 'funghi-layer';
+
+            if (map.getLayer(layerId)) map.removeLayer(layerId);
+            if (map.getSource(sourceId)) map.removeSource(sourceId);
+
+            map.addSource(sourceId, {
+                type: 'raster',
+                tiles: [forecastTileURLTemplate(date)],
+                tileSize: 256,
+                minzoom: 6,
+                maxzoom: 12
+            });
+
+            map.addLayer({
+                id: layerId,
+                type: 'raster',
+                source: sourceId,
+                paint: { 'raster-opacity': currentOpacity }
+            });
+        };
+
+        // ── FlyTo (notification deep link) ──
+        // Called by MapBridge.flyTo(latitude:longitude:zoom:)
+        window.flyTo = function(lat, lon, zoom) {
+            if (typeof lat !== 'number' || typeof lon !== 'number') return;
+            map.flyTo({
+                center: [lon, lat],
+                zoom: typeof zoom === 'number' ? zoom : 11,
+                duration: 1200
+            });
         };
 
         // ── Init ──

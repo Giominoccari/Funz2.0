@@ -27,6 +27,10 @@ final class User: Model, Content, @unchecked Sendable {
     @OptionalField(key: "photo_url")
     var photoURL: String?
 
+    /// APNs device token for push notifications (updated by the app on each launch).
+    @OptionalField(key: "device_token")
+    var deviceToken: String?
+
     @Timestamp(key: "created_at", on: .create)
     var createdAt: Date?
 

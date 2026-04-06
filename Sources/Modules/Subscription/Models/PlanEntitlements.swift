@@ -7,9 +7,11 @@ struct PlanEntitlements: Codable, Sendable, Content {
     let maxZoom: Int
     let historyDays: Int
     let features: [String]
+    /// Maximum number of POIs a user can save (used for forecast notifications).
+    let maxPOIs: Int
 
     /// Default entitlements for unauthenticated or free users.
-    static let free = PlanEntitlements(maxZoom: 9, historyDays: 0, features: [])
+    static let free = PlanEntitlements(maxZoom: 9, historyDays: 0, features: [], maxPOIs: 1)
 }
 
 // MARK: - Request storage

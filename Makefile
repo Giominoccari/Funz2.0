@@ -10,7 +10,7 @@ LOAD_ENV = if [ -f .env ]; then while IFS= read -r _line || [ -n "$$_line" ]; do
         build rebuild quick \
         db-setup db-shell db-up db-down redis-up redis-down \
         app-up app-down app-restart \
-        worker worker-trentino worker-forecast worker-forecast-trentino \
+        worker worker-trentino worker-forecast worker-forecast-trentino worker-evaluate \
         geodata-import geodata-import-boundary geodata-check \
         swift-build swift-test swift-test-scoring \
         docker-build deploy deploy-api deploy-worker cfn-deploy \
@@ -122,6 +122,9 @@ worker-forecast: ## Run forecast pipeline (generates tiles/forecast/YYYY-MM-DD/ 
 
 worker-forecast-trentino: ## Run forecast pipeline (Trentino only, faster)
 	docker exec funz-app /app/App worker --bbox trentino --mode forecast
+
+worker-evaluate: ## Evaluate forecast scores at POIs and send push notifications
+	docker exec funz-app /app/App evaluate
 
 GEODATA_VENV = .venv/geodata
 GEODATA_PYTHON = $(GEODATA_VENV)/bin/python3
