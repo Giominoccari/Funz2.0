@@ -126,6 +126,10 @@
             box-shadow: 0 2px 10px rgba(0,0,0,.18);
         }
         .maplibregl-popup-tip { border-top-color: #fff; }
+
+        /* ── Hide MapLibre logo / attribution ── */
+        .maplibregl-ctrl-bottom-right,
+        .maplibregl-ctrl-bottom-left { display: none !important; }
     </style>
 </head>
 <body>
@@ -140,12 +144,14 @@
         const initLat = parseFloat(params.get('lat')) || 46.07;
         const initLon = parseFloat(params.get('lon')) || 11.12;
         const initZoom = parseInt(params.get('zoom'), 10) || 8;
-        const authToken = params.get('token') || '';
+        let authToken = params.get('token') || '';
 
         let currentDate = params.get('date') || new Date().toISOString().slice(0, 10);
         let currentOpacity = 1;
         let heatThreshold = 1;
         let heatShowAll = false;
+        let currentMode = 'historical'; // 'historical' | 'forecast'
+        let currentForecastDate = null;
 
         // ── Tile URL builder ──
         // Uses dynamic tiles (server-side threshold filtering) when min_score > 0,
@@ -218,6 +224,8 @@
             if (map.getSource(sourceId)) map.removeSource(sourceId);
 
             currentDate = date;
+            currentMode = 'historical';
+            currentForecastDate = null;
 
             map.addSource(sourceId, {
                 type: 'raster',
@@ -462,6 +470,10 @@
             if (typeof opts.threshold === 'number') heatThreshold = opts.threshold;
             if (typeof opts.all === 'boolean') heatShowAll = opts.all;
 
+            // Forecast tiles are pre-rendered static PNGs — threshold does not apply.
+            // Keep the forecast overlay as-is when the user adjusts the slider.
+            if (currentMode === 'forecast') return;
+
             // Convert threshold (0-100) to score (0.0-1.0) and reload tiles
             const minScore = heatShowAll ? 0 : heatThreshold / 100;
             loadOverlay(currentDate, minScore);
@@ -498,8 +510,6 @@
 
         // ── Forecast overlay ──
         // Called by MapBridge.loadForecastDate(_:) — switches to forecast tile layer
-        let currentMode = 'historical'; // 'historical' | 'forecast'
-        let currentForecastDate = null;
 
         function forecastTileURLTemplate(date) {
             if (authToken) {
