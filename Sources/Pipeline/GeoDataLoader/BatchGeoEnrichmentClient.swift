@@ -88,15 +88,30 @@ struct BatchGeoEnrichmentClient: Sendable {
 
     /// Filters grid points to those within the Italian national boundary.
     ///
-    /// Runs a single PostGIS `ST_Within` query against the `italy_boundary` table
-    /// (populated by `import-geodata.py`). Called once per pipeline run before geo
-    /// enrichment to avoid wasting raster queries on non-Italian territory.
+    /// Batches points in chunks of 5000 to avoid OOM-killing the postgres process
+    /// (a single query with 4.6M ARRAY elements exhausts postgres worker memory).
     ///
     /// - Parameter points: All grid points generated from the bounding box.
     /// - Returns: Only the points that fall within the Italian border.
     func filterToItaly(_ points: [GridPoint]) async throws -> [GridPoint] {
         guard !points.isEmpty else { return [] }
 
+        let chunkSize = 5_000
+        var result: [GridPoint] = []
+        result.reserveCapacity(points.count / 2)
+
+        var offset = 0
+        while offset < points.count {
+            let chunk = Array(points[offset ..< min(offset + chunkSize, points.count)])
+            let inside = try await filterToItalyChunk(chunk)
+            result.append(contentsOf: inside)
+            offset += chunkSize
+        }
+
+        return result
+    }
+
+    private func filterToItalyChunk(_ points: [GridPoint]) async throws -> [GridPoint] {
         let lons = points.map { "\($0.longitude)" }.joined(separator: ",")
         let lats = points.map { "\($0.latitude)" }.joined(separator: ",")
         let idxs = points.indices.map { "\($0)" }.joined(separator: ",")
@@ -117,7 +132,6 @@ struct BatchGeoEnrichmentClient: Sendable {
 
         let rows = try await db.raw(SQLQueryString(sql)).all()
         let insideIndices = Set(rows.compactMap { try? $0.decode(column: "idx", as: Int.self) })
-
         return points.indices.compactMap { insideIndices.contains($0) ? points[$0] : nil }
     }
 
