@@ -62,7 +62,7 @@ struct APNsService: Sendable {
             : "https://api.sandbox.push.apple.com"
         let url = "\(host)/3/device/\(deviceToken)"
 
-        let jwt = try buildJWT()
+        let jwt = try await buildJWT()
 
         var payload: [String: Any] = [
             "aps": [
@@ -108,20 +108,19 @@ struct APNsService: Sendable {
         func verify(using _: some JWTAlgorithm) throws {}
     }
 
-    private func buildJWT() throws -> String {
-        let pemString = privateKeyPEM
-        let key = try ES256PrivateKey(pem: pemString)
+    private func buildJWT() async throws -> String {
+        let key = try ES256PrivateKey(pem: privateKeyPEM)
         var header = JWTHeader()
-        header.kid = JWKIdentifier(string: keyID)
+        header.kid = keyID  // String? in this JWTKit version
 
         let payload = APNsPayload(
             iss: IssuerClaim(value: teamID),
             iat: IssuedAtClaim(value: Date())
         )
 
-        return try JWTKeyCollection()
-            .add(ecdsa: key)
-            .sign(payload, header: header)
+        let collection = JWTKeyCollection()
+        try await collection.add(ecdsa: key)
+        return try await collection.sign(payload, header: header)
     }
 
     // MARK: - Errors

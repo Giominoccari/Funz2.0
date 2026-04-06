@@ -68,7 +68,6 @@ struct ForecastEvaluatorCommand: AsyncCommand {
             let forecastDate = PipelineRunner.dateAddDays(baseDate, dayOffset)
 
             // Load forecast raster for this date
-            let rasterPath = "Storage/tiles/forecast/\(forecastDate)/raster.bin"
             guard let cached = await RasterCache.shared.get(
                 date: "forecast/\(forecastDate)",
                 basePath: "Storage/tiles"
