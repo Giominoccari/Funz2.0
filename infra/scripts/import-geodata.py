@@ -37,6 +37,7 @@ import shutil
 import subprocess
 import sys
 import time
+import urllib.parse
 import zipfile
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from pathlib import Path
@@ -914,6 +915,26 @@ def handle_italy_boundary(_client):
     return shp
 
 
+def _pg_kv(db_url):
+    """Convert a postgres:// URL to ogr2ogr PG: key=value format.
+
+    GDAL 3.10+ appends application_name='GDAL x.y.z' (with spaces) to the
+    connection string, which breaks when the input is a URL. Key=value format
+    is not affected because GDAL appends it as a separate key.
+    """
+    p = urllib.parse.urlparse(db_url)
+    parts = [f"dbname={p.path.lstrip('/')}"]
+    if p.hostname:
+        parts.append(f"host={p.hostname}")
+    if p.port:
+        parts.append(f"port={p.port}")
+    if p.username:
+        parts.append(f"user={p.username}")
+    if p.password:
+        parts.append(f"password={p.password}")
+    return "PG:" + " ".join(parts)
+
+
 def import_vector_postgis(shp_path, table_name, db_url):
     """Import an Italy-filtered Shapefile into PostGIS as a vector table via ogr2ogr.
 
@@ -921,12 +942,10 @@ def import_vector_postgis(shp_path, table_name, db_url):
     """
     print(f"  ▶ Importing Italy boundary into PostGIS table '{table_name}'...")
 
-    # Build a postgresql:// connection string ogr2ogr can consume
-    # ogr2ogr accepts the same DSN format as psql
     ok, _, err = run([
         "ogr2ogr",
         "-f", "PostgreSQL",
-        f"PG:{db_url}",
+        _pg_kv(db_url),
         str(shp_path),
         "-nln", table_name,
         "-overwrite",
