@@ -227,36 +227,14 @@ actor PipelineRunner {
     /// Weather varies slowly over space, so we sample a coarse grid and map each
     /// fine-grid point to its nearest coarse sample via IDW interpolation.
     /// - Parameter stepDeg: Coarse grid spacing in degrees.
-    ///   Use `config.weather.resolvedWeatherStepHistorical` (~0.09° ≈ 10km) for historical maps,
-    ///   `config.weather.resolvedWeatherStepForecast` (~0.18° ≈ 20km) for forecast maps.
+    ///   Use `config.weather.resolvedWeatherStepHistorical` (~0.09° ≈ 10km) for historical maps.
     func fetchWeather(for points: [GridPoint], stepDeg: Double) async -> [String: WeatherData] {
         let defaultWeather = WeatherData(
             rain14d: 0, maxRain2d: 0, avgTemperature: 0, avgHumidity: 0, avgSoilTemp7d: 0
         )
-        guard let first = points.first else { return [:] }
+        guard !points.isEmpty else { return [:] }
 
-        // Determine bbox from points
-        var minLat = first.latitude, maxLat = first.latitude
-        var minLon = first.longitude, maxLon = first.longitude
-        for p in points {
-            minLat = min(minLat, p.latitude)
-            maxLat = max(maxLat, p.latitude)
-            minLon = min(minLon, p.longitude)
-            maxLon = max(maxLon, p.longitude)
-        }
-
-        // Generate coarse weather grid derived from actual land points (skips sea areas).
-        // stepDeg controls resolution: 0.09° ≈ 10km (historical), 0.18° ≈ 20km (forecast).
-        var coarseCells: Set<String> = []
-        var coarsePoints: [(lat: Double, lon: Double)] = []
-        for p in points {
-            let cellLat = (p.latitude / stepDeg).rounded(.down) * stepDeg
-            let cellLon = (p.longitude / stepDeg).rounded(.down) * stepDeg
-            let key = "\(cellLat),\(cellLon)"
-            if coarseCells.insert(key).inserted {
-                coarsePoints.append((cellLat, cellLon))
-            }
-        }
+        let coarsePoints = buildCoarseGrid(from: points, stepDeg: stepDeg)
 
         logger.info("Weather coarse grid", metadata: [
             "coarsePoints": "\(coarsePoints.count)",
@@ -264,11 +242,6 @@ actor PipelineRunner {
             "ratio": "\(String(format: "%.0f", Double(points.count) / Double(max(1, coarsePoints.count))))x reduction"
         ])
 
-        // Fetch weather for coarse grid points using concurrent batch API calls.
-        // Open-Meteo supports multiple coordinates per request (comma-separated),
-        // so we send ~50 coordinates per API call instead of 1.
-        // Batches are dispatched concurrently; the rate limiter + semaphore in
-        // OpenMeteoClient throttle actual HTTP connections.
         let apiBatchSize = 50
         let totalApiBatches = (coarsePoints.count + apiBatchSize - 1) / apiBatchSize
 
@@ -278,7 +251,6 @@ actor PipelineRunner {
             "totalApiCalls": "\(totalApiBatches)"
         ])
 
-        // Build all batch ranges upfront
         var batchRanges: [(index: Int, start: Int, end: Int)] = []
         batchRanges.reserveCapacity(totalApiBatches)
         var bIdx = 0
@@ -287,10 +259,8 @@ actor PipelineRunner {
             bIdx += 1
         }
 
-        // Snapshot coarse points for safe concurrent access (Swift 6 Sendable)
         let coarseSnapshot = coarsePoints
 
-        // Fetch all batches concurrently (rate limiter controls actual throughput)
         let batchResults = await withTaskGroup(
             of: (index: Int, results: [(lat: Double, lon: Double, data: WeatherData)]).self,
             returning: [[(lat: Double, lon: Double, data: WeatherData)]].self
@@ -315,7 +285,6 @@ actor PipelineRunner {
                 }
             }
 
-            // Collect results preserving order
             var ordered = [[(lat: Double, lon: Double, data: WeatherData)]](
                 repeating: [], count: totalApiBatches
             )
@@ -336,7 +305,9 @@ actor PipelineRunner {
         }
 
         let coarseWeather = batchResults.flatMap { $0 }
-        let failedCount = coarseWeather.filter { $0.data.rain14d == 0 && $0.data.avgTemperature == 0 && $0.data.avgHumidity == 0 }.count
+        let failedCount = coarseWeather.filter {
+            $0.data.rain14d == 0 && $0.data.avgTemperature == 0 && $0.data.avgHumidity == 0
+        }.count
 
         if failedCount > 0 {
             logger.warning("Weather fetch completed with failures", metadata: [
@@ -345,9 +316,214 @@ actor PipelineRunner {
             ])
         }
 
-        // IDW-interpolate weather from coarse grid to each fine-grid point
-        // using spatial bucketing for O(1) neighbor lookup instead of O(n) brute force.
-        let weatherCellSize = stepDeg * 1.1 // slightly larger than coarse step to ensure full coverage
+        return idwInterpolate(coarseWeather: coarseWeather, points: points, stepDeg: stepDeg)
+    }
+
+    /// Forecast pipeline: fetches 14-day blended weather (historical + forecast) for each
+    /// of the next `days` days, scores, tiles, and uploads for each date.
+    /// Tiles land at `forecast/YYYY-MM-DD/z/x/y.png`.
+    func runForecast(
+        bbox: BoundingBox,
+        baseDate: String,
+        days: Int = 5,
+        openMeteoClient: OpenMeteoClient,
+        db: any SQLDatabase
+    ) async throws {
+        let fullStart = ContinuousClock.now
+        let defaultWeather = WeatherData(rain14d: 0, maxRain2d: 0, avgTemperature: 0, avgHumidity: 0, avgSoilTemp7d: 0)
+
+        // Phase 1+2: Reuse geo cache (terrain is static)
+        let points: [GridPoint]
+        let cacheFile = Self.geoCachePath(bbox: bbox, spacing: config.gridSpacingMeters)
+        if let cached = Self.loadGeoCache(from: cacheFile, logger: logger) {
+            points = cached
+        } else {
+            logger.warning("Geo cache missing for forecast — run historical pipeline first")
+            return
+        }
+
+        let stepDeg = config.weather.resolvedWeatherStepHistorical
+        let coarsePoints = buildCoarseGrid(from: points, stepDeg: stepDeg)
+        let coords = coarsePoints.map { (latitude: $0.lat, longitude: $0.lon) }
+
+        logger.info("Forecast — coarse grid built", metadata: [
+            "coarsePoints": "\(coarsePoints.count)",
+            "finePoints": "\(points.count)"
+        ])
+
+        // Fetch historical observations from DB (last 13 days ending today)
+        // Used to fill the look-back window for near-future forecast days.
+        let histRepo = WeatherRepository(db: db)
+        let histStart = Self.dateAddDays(baseDate, -13)
+        let historicalByIndex: [Int: [DailyObservation]]
+        do {
+            historicalByIndex = try await histRepo.fetchExistingDaily(
+                coordinates: coords, from: histStart, to: baseDate
+            )
+            logger.info("Forecast — historical data loaded from DB", metadata: [
+                "from": "\(histStart)",
+                "to": "\(baseDate)",
+                "coordinatesWithData": "\(historicalByIndex.count)/\(coarsePoints.count)"
+            ])
+        } catch {
+            logger.warning("Forecast — failed to load historical data, blend will use forecast-only", metadata: ["error": "\(error)"])
+            historicalByIndex = [:]
+        }
+
+        // Fetch forecast observations: today (0) + days 1..days
+        let forecastDaysToFetch = days + 1
+        logger.info("Forecast — fetching Open-Meteo forecast", metadata: [
+            "coordinates": "\(coarsePoints.count)",
+            "forecastDays": "\(forecastDaysToFetch)"
+        ])
+
+        let apiBatchSize = 50
+        var forecastByCoord = [[DailyObservation]](repeating: [], count: coarsePoints.count)
+
+        let batchCount = (coarsePoints.count + apiBatchSize - 1) / apiBatchSize
+        var batchRanges: [(index: Int, start: Int, end: Int)] = []
+        for (i, batchStart) in stride(from: 0, to: coarsePoints.count, by: apiBatchSize).enumerated() {
+            batchRanges.append((i, batchStart, min(batchStart + apiBatchSize, coarsePoints.count)))
+        }
+        let coordsSnapshot = coords
+        let coarseSnapshot = coarsePoints
+
+        let forecastBatchResults = await withTaskGroup(
+            of: (index: Int, results: [(coordIdx: Int, obs: [DailyObservation])]).self,
+            returning: [(index: Int, results: [(coordIdx: Int, obs: [DailyObservation])])].self
+        ) { group in
+            for range in batchRanges {
+                group.addTask { [logger] in
+                    let batchCoords = Array(coordsSnapshot[range.start..<range.end])
+                    do {
+                        let results = try await openMeteoClient.fetchForecastDailyBatch(
+                            coordinates: batchCoords,
+                            forecastDays: forecastDaysToFetch
+                        )
+                        let mapped = results.enumerated().map { (coordIdx: range.start + $0.offset, obs: $0.element) }
+                        return (range.index, mapped)
+                    } catch {
+                        logger.warning("Forecast batch fetch failed", metadata: [
+                            "batchStart": "\(range.start)",
+                            "batchSize": "\(batchCoords.count)",
+                            "error": "\(error)"
+                        ])
+                        let fallback = (range.start..<range.end).map { (coordIdx: $0, obs: [DailyObservation]()) }
+                        return (range.index, fallback)
+                    }
+                }
+            }
+
+            var ordered = [(index: Int, results: [(coordIdx: Int, obs: [DailyObservation])])]()
+            ordered.reserveCapacity(batchCount)
+            for await result in group { ordered.append(result) }
+            return ordered
+        }
+
+        for batch in forecastBatchResults {
+            for entry in batch.results {
+                forecastByCoord[entry.coordIdx] = entry.obs
+            }
+        }
+
+        logger.info("Forecast — Open-Meteo fetch complete", metadata: [
+            "fetched": "\(forecastByCoord.filter { !$0.isEmpty }.count)/\(coarsePoints.count)"
+        ])
+
+        // Generate one map per forecast day
+        let tileGen = TileGenerator(tileZoomMin: config.tileZoomMin, tileZoomMax: config.tileZoomMax)
+        let engine = ScoringEngine(weights: config.scoringWeights)
+
+        for d in 1...days {
+            let forecastDate = Self.dateAddDays(baseDate, d)
+            let dayOfYear = Self.extractDayOfYear(from: forecastDate)
+            let dayStart = ContinuousClock.now
+
+            // Build blended WeatherData for each coarse point:
+            //   historical: last (14-d) days from DB
+            //   forecast:   days 1..d from Open-Meteo
+            var coarseWeather: [(lat: Double, lon: Double, data: WeatherData)] = []
+            coarseWeather.reserveCapacity(coarsePoints.count)
+
+            for i in 0..<coarsePoints.count {
+                let cp = coarseSnapshot[i]
+                let histObs = historicalByIndex[i] ?? []
+                let histWindow = Array(histObs.suffix(14 - d))
+
+                let forecastObs = forecastByCoord[i]
+                // forecastObs[0] = today, [1] = tomorrow, [d] = the target day
+                let forecastWindow: [DailyObservation]
+                if forecastObs.count > d {
+                    forecastWindow = Array(forecastObs[1...d])
+                } else {
+                    forecastWindow = Array(forecastObs.dropFirst().prefix(d))
+                }
+
+                let combined = histWindow + forecastWindow
+                coarseWeather.append((lat: cp.lat, lon: cp.lon, data: WeatherData.aggregate(from: combined)))
+            }
+
+            let weatherMap = idwInterpolate(coarseWeather: coarseWeather, points: points, stepDeg: stepDeg)
+
+            let inputs = points.map { point in
+                let key = "\(point.latitude),\(point.longitude)"
+                return ScoringEngine.Input(point: point, weather: weatherMap[key] ?? defaultWeather, dayOfYear: dayOfYear)
+            }
+            let results = engine.scoreBatch(inputs)
+
+            let output = await tileGen.generateAll(results: results, bbox: bbox)
+
+            let rasterPath = "Storage/tiles/forecast/\(forecastDate)/raster.bin"
+            do {
+                try output.raster.save(to: rasterPath)
+            } catch {
+                logger.warning("Failed to save forecast raster", metadata: ["date": "\(forecastDate)", "error": "\(error)"])
+            }
+
+            try await tileUploader.upload(tiles: output.tiles, date: "forecast/\(forecastDate)")
+
+            logger.info("Forecast day complete", metadata: [
+                "date": "\(forecastDate)",
+                "day": "\(d)/\(days)",
+                "tiles": "\(output.tiles.count)",
+                "duration": "\(ContinuousClock.now - dayStart)"
+            ])
+        }
+
+        logger.info("Forecast pipeline complete", metadata: [
+            "baseDate": "\(baseDate)",
+            "days": "\(days)",
+            "totalDuration": "\(ContinuousClock.now - fullStart)"
+        ])
+    }
+
+    // MARK: - Shared weather helpers
+
+    /// Builds a deduplicated coarse grid from fine-grid points by snapping to `stepDeg` cells.
+    private func buildCoarseGrid(from points: [GridPoint], stepDeg: Double) -> [(lat: Double, lon: Double)] {
+        var cells: Set<String> = []
+        var coarse: [(lat: Double, lon: Double)] = []
+        for p in points {
+            let cellLat = (p.latitude  / stepDeg).rounded(.down) * stepDeg
+            let cellLon = (p.longitude / stepDeg).rounded(.down) * stepDeg
+            let key = "\(cellLat),\(cellLon)"
+            if cells.insert(key).inserted {
+                coarse.append((cellLat, cellLon))
+            }
+        }
+        return coarse
+    }
+
+    /// IDW interpolation from coarse weather samples to fine-grid points.
+    /// Uses spatial bucketing (3x3 cell search) for O(1) neighbor lookup.
+    private func idwInterpolate(
+        coarseWeather: [(lat: Double, lon: Double, data: WeatherData)],
+        points: [GridPoint],
+        stepDeg: Double
+    ) -> [String: WeatherData] {
+        let defaultWeather = WeatherData(rain14d: 0, maxRain2d: 0, avgTemperature: 0, avgHumidity: 0, avgSoilTemp7d: 0)
+        let weatherCellSize = stepDeg * 1.1
+
         var weatherGrid: [Int: [(lat: Double, lon: Double, data: WeatherData)]] = [:]
         weatherGrid.reserveCapacity(coarseWeather.count)
         for cw in coarseWeather {
@@ -363,36 +539,27 @@ actor PipelineRunner {
 
         for point in points {
             let key = "\(point.latitude),\(point.longitude)"
-
-            let centerLatCell = Int(floor(point.latitude / weatherCellSize))
+            let centerLatCell = Int(floor(point.latitude  / weatherCellSize))
             let centerLonCell = Int(floor(point.longitude / weatherCellSize))
 
-            var weightedRain = 0.0
-            var weightedMaxRain2d = 0.0
-            var weightedTemp = 0.0
-            var weightedHum = 0.0
-            var weightedSoilTemp = 0.0
+            var weightedRain = 0.0, weightedMaxRain2d = 0.0
+            var weightedTemp = 0.0, weightedHum = 0.0, weightedSoilTemp = 0.0
             var totalWeight = 0.0
             var exactMatch = false
 
-            // Search 3x3 neighboring cells (~9 coarse points instead of 15,812)
             outer: for dLat in -1...1 {
                 for dLon in -1...1 {
                     let cellKey = (centerLatCell + dLat) * 100_000 + (centerLonCell + dLon)
                     guard let cellPoints = weatherGrid[cellKey] else { continue }
                     for cw in cellPoints {
-                        let dLatDiff = point.latitude - cw.lat
+                        let dLatDiff = point.latitude  - cw.lat
                         let dLonDiff = point.longitude - cw.lon
                         let distSq = dLatDiff * dLatDiff + dLonDiff * dLonDiff
 
                         if distSq < 1e-12 {
-                            weightedRain = cw.data.rain14d
-                            weightedMaxRain2d = cw.data.maxRain2d
-                            weightedTemp = cw.data.avgTemperature
-                            weightedHum = cw.data.avgHumidity
-                            weightedSoilTemp = cw.data.avgSoilTemp7d
-                            totalWeight = 1.0
-                            exactMatch = true
+                            weightedRain = cw.data.rain14d; weightedMaxRain2d = cw.data.maxRain2d
+                            weightedTemp = cw.data.avgTemperature; weightedHum = cw.data.avgHumidity
+                            weightedSoilTemp = cw.data.avgSoilTemp7d; totalWeight = 1.0; exactMatch = true
                             break outer
                         }
 
@@ -408,23 +575,14 @@ actor PipelineRunner {
             }
 
             if totalWeight > 0 {
-                if exactMatch {
-                    weatherMap[key] = WeatherData(
-                        rain14d: weightedRain,
-                        maxRain2d: weightedMaxRain2d,
-                        avgTemperature: weightedTemp,
-                        avgHumidity: weightedHum,
-                        avgSoilTemp7d: weightedSoilTemp
-                    )
-                } else {
-                    weatherMap[key] = WeatherData(
-                        rain14d: weightedRain / totalWeight,
-                        maxRain2d: weightedMaxRain2d / totalWeight,
-                        avgTemperature: weightedTemp / totalWeight,
-                        avgHumidity: weightedHum / totalWeight,
-                        avgSoilTemp7d: weightedSoilTemp / totalWeight
-                    )
-                }
+                let w = exactMatch ? 1.0 : totalWeight
+                weatherMap[key] = WeatherData(
+                    rain14d: weightedRain / w,
+                    maxRain2d: weightedMaxRain2d / w,
+                    avgTemperature: weightedTemp / w,
+                    avgHumidity: weightedHum / w,
+                    avgSoilTemp7d: weightedSoilTemp / w
+                )
             } else {
                 weatherMap[key] = defaultWeather
             }
@@ -440,6 +598,17 @@ actor PipelineRunner {
         }
 
         return weatherMap
+    }
+
+    /// Returns `dateString + days` as a "YYYY-MM-DD" string.
+    static func dateAddDays(_ dateString: String, _ days: Int) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        formatter.timeZone = TimeZone(identifier: "UTC")
+        guard let date = formatter.date(from: dateString),
+              let result = Calendar(identifier: .gregorian).date(byAdding: .day, value: days, to: date)
+        else { return dateString }
+        return formatter.string(from: result)
     }
 
     // MARK: - Geo cache (static terrain data)

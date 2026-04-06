@@ -266,6 +266,161 @@ struct OpenMeteoClient: WeatherClient {
         return responses.map { toDailyObservations($0.daily, hourly: $0.hourly) }
     }
 
+    // MARK: - Forecast
+
+    /// Open-Meteo forecast endpoint (distinct from archive endpoint used for historical data).
+    static let forecastBaseURL = "https://api.open-meteo.com/v1/forecast"
+
+    /// Fetch forecast data for multiple coordinates in batches.
+    /// Returns one array of DailyObservation per coordinate, with `forecastDays` entries each.
+    /// Index 0 = today, index 1 = tomorrow, ..., index forecastDays-1 = the last forecast day.
+    func fetchForecastDailyBatch(
+        coordinates: [(latitude: Double, longitude: Double)],
+        forecastDays: Int = 6
+    ) async throws -> [[DailyObservation]] {
+        guard !coordinates.isEmpty else { return [] }
+
+        if coordinates.count == 1 {
+            let single = try await fetchForecastSingle(
+                latitude: coordinates[0].latitude,
+                longitude: coordinates[0].longitude,
+                forecastDays: forecastDays
+            )
+            return [single]
+        }
+
+        let rounded = coordinates.map { (
+            lat: (($0.latitude  * 1000).rounded() / 1000),
+            lon: (($0.longitude * 1000).rounded() / 1000)
+        ) }
+
+        let lats = rounded.map { "\($0.lat)" }.joined(separator: ",")
+        let lons = rounded.map { "\($0.lon)" }.joined(separator: ",")
+
+        let urlString = "\(Self.forecastBaseURL)?latitude=\(lats)&longitude=\(lons)"
+            + "&forecast_days=\(forecastDays)"
+            + "&daily=rain_sum,temperature_2m_mean,relative_humidity_2m_mean"
+            + "&hourly=soil_temperature_0_to_7cm"
+            + "&timezone=Europe%2FRome"
+
+        await rateLimiter.consume()
+        await concurrencySemaphore.wait()
+        defer { Task { await concurrencySemaphore.signal() } }
+
+        var lastError: Error?
+        for attempt in 0..<retryMaxAttempts {
+            do {
+                var request = HTTPClientRequest(url: urlString)
+                request.method = .GET
+                let response = try await httpClient.execute(request, timeout: .seconds(60))
+                let status = response.status.code
+
+                if status == 429 || status >= 500 {
+                    let errorBody = try? await response.body.collect(upTo: 4096)
+                    let errorText = errorBody.flatMap { String(buffer: $0) } ?? "no body"
+                    lastError = WeatherFetchError.httpError(
+                        statusCode: UInt(status), latitude: rounded[0].lat, longitude: rounded[0].lon
+                    )
+                    let delay: Int
+                    if status == 429 {
+                        delay = Self.rateLimitDelay(body: errorText)
+                    } else {
+                        let baseDelay = retryBaseDelayMs * (1 << attempt)
+                        delay = baseDelay + Int.random(in: 0...(baseDelay / 2))
+                    }
+                    Self.logger.warning("Retrying forecast batch fetch", metadata: [
+                        "attempt": "\(attempt + 1)",
+                        "status": "\(status)",
+                        "batchSize": "\(coordinates.count)",
+                        "delayMs": "\(delay)",
+                        "responseBody": "\(errorText)"
+                    ])
+                    try await Task.sleep(for: .milliseconds(delay))
+                    continue
+                }
+
+                guard (200..<300).contains(Int(status)) else {
+                    throw WeatherFetchError.httpError(
+                        statusCode: UInt(status), latitude: rounded[0].lat, longitude: rounded[0].lon
+                    )
+                }
+
+                let maxSize = 1024 * 256 * coordinates.count
+                let body = try await response.body.collect(upTo: maxSize)
+                let data = Data(buffer: body)
+                return try Self.parseDailyBatchResponse(data, coordinates: rounded)
+            } catch let error as WeatherFetchError {
+                throw error
+            } catch {
+                lastError = error
+                if attempt < retryMaxAttempts - 1 {
+                    let delay = retryBaseDelayMs * (1 << attempt)
+                    try await Task.sleep(for: .milliseconds(delay))
+                }
+            }
+        }
+        throw lastError ?? WeatherFetchError.noData(latitude: rounded[0].lat, longitude: rounded[0].lon)
+    }
+
+    private func fetchForecastSingle(
+        latitude: Double, longitude: Double, forecastDays: Int
+    ) async throws -> [DailyObservation] {
+        let roundedLat = (latitude  * 1000).rounded() / 1000
+        let roundedLon = (longitude * 1000).rounded() / 1000
+
+        let urlString = "\(Self.forecastBaseURL)?latitude=\(roundedLat)&longitude=\(roundedLon)"
+            + "&forecast_days=\(forecastDays)"
+            + "&daily=rain_sum,temperature_2m_mean,relative_humidity_2m_mean"
+            + "&hourly=soil_temperature_0_to_7cm"
+            + "&timezone=Europe%2FRome"
+
+        await rateLimiter.consume()
+        await concurrencySemaphore.wait()
+        defer { Task { await concurrencySemaphore.signal() } }
+
+        var lastError: Error?
+        for attempt in 0..<retryMaxAttempts {
+            do {
+                var request = HTTPClientRequest(url: urlString)
+                request.method = .GET
+                let response = try await httpClient.execute(request, timeout: .seconds(30))
+                let status = response.status.code
+
+                if status == 429 || status >= 500 {
+                    let errorBody = try? await response.body.collect(upTo: 4096)
+                    let errorText = errorBody.flatMap { String(buffer: $0) } ?? "no body"
+                    lastError = WeatherFetchError.httpError(
+                        statusCode: UInt(status), latitude: roundedLat, longitude: roundedLon
+                    )
+                    let delay = status == 429
+                        ? Self.rateLimitDelay(body: errorText)
+                        : retryBaseDelayMs * (1 << attempt) + Int.random(in: 0...(retryBaseDelayMs / 2))
+                    try await Task.sleep(for: .milliseconds(delay))
+                    continue
+                }
+
+                guard (200..<300).contains(Int(status)) else {
+                    throw WeatherFetchError.httpError(
+                        statusCode: UInt(status), latitude: roundedLat, longitude: roundedLon
+                    )
+                }
+
+                let body = try await response.body.collect(upTo: 1024 * 256)
+                let data = Data(buffer: body)
+                return try Self.parseDailyResponse(data, latitude: roundedLat, longitude: roundedLon)
+            } catch let error as WeatherFetchError {
+                throw error
+            } catch {
+                lastError = error
+                if attempt < retryMaxAttempts - 1 {
+                    let delay = retryBaseDelayMs * (1 << attempt)
+                    try await Task.sleep(for: .milliseconds(delay))
+                }
+            }
+        }
+        throw lastError ?? WeatherFetchError.noData(latitude: roundedLat, longitude: roundedLon)
+    }
+
     // MARK: - Helpers
 
     /// Returns the appropriate retry delay in milliseconds for a 429 response.

@@ -10,7 +10,8 @@ LOAD_ENV = if [ -f .env ]; then while IFS= read -r _line || [ -n "$$_line" ]; do
         build rebuild quick \
         db-setup db-shell db-up db-down redis-up redis-down \
         app-up app-down app-restart \
-        worker geodata-import geodata-import-boundary geodata-check \
+        worker worker-trentino worker-forecast worker-forecast-trentino \
+        geodata-import geodata-import-boundary geodata-check \
         swift-build swift-test swift-test-scoring \
         docker-build deploy deploy-api deploy-worker cfn-deploy \
         clean clean-all \
@@ -110,11 +111,17 @@ db-shell: ## Open psql shell to the database
 # Pipeline
 # ═══════════════════════════════════════════════════════════════════
 
-worker: ## Run map pipeline inside the app container
+worker: ## Run historical map pipeline
 	docker exec funz-app /app/App worker --bbox italy
 
-worker-trentino: ## Run map pipeline (Trentino only, faster)
+worker-trentino: ## Run historical pipeline (Trentino only, faster)
 	docker exec funz-app /app/App worker --bbox trentino
+
+worker-forecast: ## Run forecast pipeline (generates tiles/forecast/YYYY-MM-DD/ for next 5 days)
+	docker exec funz-app /app/App worker --bbox italy --mode forecast
+
+worker-forecast-trentino: ## Run forecast pipeline (Trentino only, faster)
+	docker exec funz-app /app/App worker --bbox trentino --mode forecast
 
 GEODATA_VENV = .venv/geodata
 GEODATA_PYTHON = $(GEODATA_VENV)/bin/python3
