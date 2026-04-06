@@ -285,13 +285,25 @@ struct MapController: RouteCollection, Sendable {
     @Sendable
     func getForecastDates(req: Request) async throws -> [String] {
         let forecastDir = req.application.directory.workingDirectory + "Storage/tiles/forecast"
-        guard FileManager.default.fileExists(atPath: forecastDir) else { return [] }
-        let contents = (try? FileManager.default.contentsOfDirectory(atPath: forecastDir)) ?? []
+        guard FileManager.default.fileExists(atPath: forecastDir) else {
+            Self.logger.debug("Forecast tiles directory not found", metadata: ["path": "\(forecastDir)"])
+            return []
+        }
+        let contents: [String]
+        do {
+            contents = try FileManager.default.contentsOfDirectory(atPath: forecastDir)
+        } catch {
+            Self.logger.error("Failed to list forecast tiles directory",
+                              metadata: ["path": "\(forecastDir)", "error": "\(error)"])
+            return []
+        }
         let dateFormatter = DateFormatter()
         dateFormatter.dateFormat = "yyyy-MM-dd"
-        return contents
+        let dates = contents
             .filter { dateFormatter.date(from: $0) != nil }
             .sorted()
+        Self.logger.debug("Forecast dates listed", metadata: ["path": "\(forecastDir)", "count": "\(dates.count)", "dates": "\(dates)"])
+        return dates
     }
 
     // MARK: - S3 Helpers
