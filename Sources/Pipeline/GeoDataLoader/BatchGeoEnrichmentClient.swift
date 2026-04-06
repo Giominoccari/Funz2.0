@@ -86,6 +86,41 @@ struct BatchGeoEnrichmentClient: Sendable {
         return enriched
     }
 
+    /// Filters grid points to those within the Italian national boundary.
+    ///
+    /// Runs a single PostGIS `ST_Within` query against the `italy_boundary` table
+    /// (populated by `import-geodata.py`). Called once per pipeline run before geo
+    /// enrichment to avoid wasting raster queries on non-Italian territory.
+    ///
+    /// - Parameter points: All grid points generated from the bounding box.
+    /// - Returns: Only the points that fall within the Italian border.
+    func filterToItaly(_ points: [GridPoint]) async throws -> [GridPoint] {
+        guard !points.isEmpty else { return [] }
+
+        let lons = points.map { "\($0.longitude)" }.joined(separator: ",")
+        let lats = points.map { "\($0.latitude)" }.joined(separator: ",")
+        let idxs = points.indices.map { "\($0)" }.joined(separator: ",")
+
+        let sql = """
+            SELECT p.idx
+            FROM (
+                SELECT
+                    unnest(ARRAY[\(idxs)]) AS idx,
+                    ST_SetSRID(ST_MakePoint(
+                        unnest(ARRAY[\(lons)]),
+                        unnest(ARRAY[\(lats)])
+                    ), 4326) AS geom
+            ) p
+            WHERE ST_Within(p.geom, (SELECT geom FROM italy_boundary LIMIT 1))
+            ORDER BY p.idx
+            """
+
+        let rows = try await db.raw(SQLQueryString(sql)).all()
+        let insideIndices = Set(rows.compactMap { try? $0.decode(column: "idx", as: Int.self) })
+
+        return points.indices.compactMap { insideIndices.contains($0) ? points[$0] : nil }
+    }
+
     /// Queries a single raster table for a batch of points.
     /// Uses UNNEST arrays + a simple subquery so PostgreSQL uses the GIST index.
     private func queryRaster(

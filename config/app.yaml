@@ -27,6 +27,11 @@ pipeline:
     cacheTTLSeconds: 86400
     rateLimitPerSecond: 5
     rateLimitBurst: 2
+    # Coarse grid step in degrees. Each unique cell = 1 Open-Meteo request.
+    # Historical: ~10km (0.09°) — full precision for current-day maps.
+    # Forecast:   ~20km (0.18°) — halves API usage for 5-day outlook tiles.
+    weatherStepHistorical: 0.09
+    weatherStepForecast: 0.18
 
 map:
   tileSignedUrlTtlSeconds: 3600

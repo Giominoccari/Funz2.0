@@ -71,6 +71,7 @@ func configure(_ app: Application) async throws {
     app.migrations.add(CreateRasterExtensions())
     app.migrations.add(CreateWeatherObservations())
     app.migrations.add(AddSoilTempColumn())
+    app.migrations.add(CreateItalyBoundary())
     try await app.autoMigrate()
 
     // Validate PostGIS raster data (Copernicus DEM required for altitude)

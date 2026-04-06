@@ -41,6 +41,13 @@ struct WeatherConfig: Codable, Sendable {
     let cacheTTLSeconds: Int
     let rateLimitPerSecond: Int?
     let rateLimitBurst: Int?
+    /// Coarse grid step for historical pipeline (~10km). Each unique cell = 1 Open-Meteo request.
+    let weatherStepHistorical: Double?
+    /// Coarse grid step for forecast pipeline (~20km). Halves API calls at the cost of spatial precision.
+    let weatherStepForecast: Double?
+
+    var resolvedWeatherStepHistorical: Double { weatherStepHistorical ?? 0.09 }
+    var resolvedWeatherStepForecast: Double { weatherStepForecast ?? 0.18 }
 }
 
 struct ScoringWeights: Codable, Sendable {

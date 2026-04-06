@@ -43,6 +43,24 @@ actor PipelineRunner {
             ])
 
             let phaseStart2 = ContinuousClock.now
+
+            // Pre-filter to Italian territory before PostGIS raster queries.
+            // Saves ~20-30% of geo enrichment calls that would otherwise hit
+            // Croatian/Slovenian/Corsican forest areas inside the bbox.
+            let beforeBoundary = generated.count
+            do {
+                generated = try await geoEnrichmentClient.filterToItaly(generated)
+                logger.info("Phase 2 — Italy boundary filter applied", metadata: [
+                    "before": "\(beforeBoundary)",
+                    "after": "\(generated.count)",
+                    "removed": "\(beforeBoundary - generated.count)"
+                ])
+            } catch {
+                logger.warning("Italy boundary filter failed — proceeding without it", metadata: [
+                    "error": "\(error)"
+                ])
+            }
+
             generated = await enrichWithGeoData(generated)
             let beforeFilter = generated.count
             generated = generated.filter { Self.isSuitableTerrain($0) }
@@ -59,7 +77,7 @@ actor PipelineRunner {
 
         // Phase 3: Fetch weather data
         let phaseStart3 = ContinuousClock.now
-        let weatherMap = await fetchWeather(for: points)
+        let weatherMap = await fetchWeather(for: points, stepDeg: config.weather.resolvedWeatherStepHistorical)
         logger.info("Phase 3 — Weather fetch complete", metadata: [
             "points": "\(weatherMap.count)",
             "duration": "\(ContinuousClock.now - phaseStart3)"
@@ -206,10 +224,12 @@ actor PipelineRunner {
         return enriched
     }
 
-    /// Weather varies slowly over space (~10km resolution is sufficient).
-    /// Instead of fetching 24K+ points, we sample a coarse grid and map each
-    /// fine-grid point to its nearest coarse sample.
-    private func fetchWeather(for points: [GridPoint]) async -> [String: WeatherData] {
+    /// Weather varies slowly over space, so we sample a coarse grid and map each
+    /// fine-grid point to its nearest coarse sample via IDW interpolation.
+    /// - Parameter stepDeg: Coarse grid spacing in degrees.
+    ///   Use `config.weather.resolvedWeatherStepHistorical` (~0.09° ≈ 10km) for historical maps,
+    ///   `config.weather.resolvedWeatherStepForecast` (~0.18° ≈ 20km) for forecast maps.
+    func fetchWeather(for points: [GridPoint], stepDeg: Double) async -> [String: WeatherData] {
         let defaultWeather = WeatherData(
             rain14d: 0, maxRain2d: 0, avgTemperature: 0, avgHumidity: 0, avgSoilTemp7d: 0
         )
@@ -225,14 +245,13 @@ actor PipelineRunner {
             maxLon = max(maxLon, p.longitude)
         }
 
-        // Generate coarse weather grid (~10km spacing ≈ 0.09° latitude)
-        // Derive from actual land points instead of full bbox to skip sea areas
-        let weatherStepDeg = 0.09
+        // Generate coarse weather grid derived from actual land points (skips sea areas).
+        // stepDeg controls resolution: 0.09° ≈ 10km (historical), 0.18° ≈ 20km (forecast).
         var coarseCells: Set<String> = []
         var coarsePoints: [(lat: Double, lon: Double)] = []
         for p in points {
-            let cellLat = (p.latitude / weatherStepDeg).rounded(.down) * weatherStepDeg
-            let cellLon = (p.longitude / weatherStepDeg).rounded(.down) * weatherStepDeg
+            let cellLat = (p.latitude / stepDeg).rounded(.down) * stepDeg
+            let cellLon = (p.longitude / stepDeg).rounded(.down) * stepDeg
             let key = "\(cellLat),\(cellLon)"
             if coarseCells.insert(key).inserted {
                 coarsePoints.append((cellLat, cellLon))
@@ -328,7 +347,7 @@ actor PipelineRunner {
 
         // IDW-interpolate weather from coarse grid to each fine-grid point
         // using spatial bucketing for O(1) neighbor lookup instead of O(n) brute force.
-        let weatherCellSize = 0.1 // ~10km cells, slightly larger than coarse step (0.09°)
+        let weatherCellSize = stepDeg * 1.1 // slightly larger than coarse step to ensure full coverage
         var weatherGrid: [Int: [(lat: Double, lon: Double, data: WeatherData)]] = [:]
         weatherGrid.reserveCapacity(coarseWeather.count)
         for cw in coarseWeather {
@@ -427,12 +446,15 @@ actor PipelineRunner {
     //
     // Binary format: 35 bytes per point
     //   lat(8B) + lon(8B) + altitude(8B) + aspect(8B) + forestType(1B) + soilType(1B) + corineCode(1B)
-
+    //
+    // Cache version: bump this constant whenever the set of filters changes
+    // (e.g. adding Italy boundary filter) to force automatic cache regeneration.
+    private static let cacheVersion = 2  // v2: added Italy boundary filter
     private static let cacheDir = ".cache"
     private static let recordSize = 35
 
     private static func geoCachePath(bbox: BoundingBox, spacing: Int) -> String {
-        let key = "\(bbox.minLat)_\(bbox.maxLat)_\(bbox.minLon)_\(bbox.maxLon)_\(spacing)"
+        let key = "\(bbox.minLat)_\(bbox.maxLat)_\(bbox.minLon)_\(bbox.maxLon)_\(spacing)_v\(cacheVersion)"
         return "\(cacheDir)/geo_\(key).bin"
     }
 

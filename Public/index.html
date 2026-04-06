@@ -88,12 +88,21 @@
 
         /* ── Track start / end markers ── */
         .track-endpoint {
-            width: 12px; height: 12px; border-radius: 50%;
-            border: 2.5px solid #fff;
-            box-shadow: 0 1px 4px rgba(0,0,0,.3);
+            width: 16px; height: 16px; border-radius: 50%;
+            border: 3px solid #fff;
+            box-shadow: 0 2px 8px rgba(0,0,0,.45);
         }
-        .track-start { background: #2ecc71; }
-        .track-end   { background: #FF6B00; }
+        .track-start { background: #34C759; }
+        .track-end {
+            background: #FF375F;
+            box-shadow: 0 2px 8px rgba(0,0,0,.45), 0 0 0 5px rgba(255,55,95,.25);
+            animation: track-pulse 1.8s ease-out infinite;
+        }
+        @keyframes track-pulse {
+            0%   { box-shadow: 0 2px 8px rgba(0,0,0,.45), 0 0 0 0   rgba(255,55,95,.5); }
+            70%  { box-shadow: 0 2px 8px rgba(0,0,0,.45), 0 0 0 10px rgba(255,55,95,0); }
+            100% { box-shadow: 0 2px 8px rgba(0,0,0,.45), 0 0 0 0   rgba(255,55,95,0); }
+        }
 
         /* ── Center crosshair ── */
         #crosshair {
@@ -317,44 +326,29 @@
             } else {
                 map.addSource('live-track', { type: 'geojson', data: geojson });
 
-                // Glow layer (wider, translucent)
-                map.addLayer({
-                    id: 'live-track-glow',
-                    type: 'line',
-                    source: 'live-track',
-                    paint: {
-                        'line-color': '#FF6B00',
-                        'line-width': 10,
-                        'line-opacity': 0.15,
-                        'line-blur': 6
-                    }
-                });
-
-                // Casing (dark border for contrast on satellite)
+                // White casing for contrast on satellite imagery
                 map.addLayer({
                     id: 'live-track-casing',
                     type: 'line',
                     source: 'live-track',
+                    layout: { 'line-cap': 'round', 'line-join': 'round' },
                     paint: {
-                        'line-color': 'rgba(0,0,0,0.35)',
-                        'line-width': 5.5,
-                        'line-opacity': 1
+                        'line-color': '#ffffff',
+                        'line-width': 6,
+                        'line-opacity': 0.9
                     }
                 });
 
-                // Core line
+                // Vibrant core line
                 map.addLayer({
                     id: 'live-track-line',
                     type: 'line',
                     source: 'live-track',
+                    layout: { 'line-cap': 'round', 'line-join': 'round' },
                     paint: {
-                        'line-color': '#FF6B00',
+                        'line-color': '#FF375F',
                         'line-width': 3.5,
                         'line-opacity': 1
-                    },
-                    layout: {
-                        'line-cap': 'round',
-                        'line-join': 'round'
                     }
                 });
             }
@@ -379,12 +373,23 @@
                 } else {
                     trackEndMarker.setLngLat(endCoord);
                 }
+
+                // Auto-zoom to street level when tracking starts (first few points)
+                if (lineCoords.length <= 3 && map.getZoom() < 15) {
+                    map.flyTo({ center: endCoord, zoom: 16, duration: 1200 });
+                } else {
+                    // Auto-pan to keep current position visible during live tracking
+                    const bounds = map.getBounds();
+                    if (!bounds.contains(endCoord)) {
+                        map.easeTo({ center: endCoord, duration: 800 });
+                    }
+                }
             }
         }
 
         // ── Clear live track (called when outing ends) ──
         function clearTrack() {
-            ['live-track-line', 'live-track-casing', 'live-track-glow'].forEach(id => {
+            ['live-track-line', 'live-track-casing'].forEach(id => {
                 if (map.getLayer(id)) map.removeLayer(id);
             });
             if (map.getSource('live-track')) map.removeSource('live-track');

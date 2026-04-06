@@ -79,6 +79,7 @@ def check_commands():
     required = {
         "gdalwarp": "brew install gdal",
         "gdaldem": "brew install gdal",
+        "ogr2ogr":  "brew install gdal",
         "raster2pgsql": "brew install postgis",
         "psql": "brew install libpq",
     }
@@ -869,6 +870,92 @@ def handle_aspect(_client):
     return final
 
 
+# ─── Italy National Boundary (Natural Earth) ─────────────────────────
+
+NATURAL_EARTH_URL = (
+    "https://naturalearth.s3.amazonaws.com/10m_cultural/ne_10m_admin_0_countries.zip"
+)
+
+
+def handle_italy_boundary(_client):
+    """Download Natural Earth 10m Admin 0 Countries and extract Italy polygon.
+
+    Source: Natural Earth — public domain (CC0), no auth needed.
+    Requires: ogr2ogr (part of GDAL).
+    """
+    shp = DATA_DIR / "ne_10m_admin_0_countries" / "ne_10m_admin_0_countries.shp"
+
+    if not shp.exists():
+        zip_path = DATA_DIR / "ne_10m_admin_0_countries.zip"
+        if not zip_path.exists():
+            print("  ▶ Downloading Natural Earth Admin 0 Countries...")
+            ok, _, err = run(
+                ["curl", "-sS", "-f", "-L", "-o", str(zip_path), NATURAL_EARTH_URL],
+                timeout=120,
+            )
+            if not ok or not zip_path.exists():
+                print(f"  ✗ Download failed: {err[:200]}")
+                return None
+            print(f"  ✔ Downloaded ({size_mb(zip_path):.0f} MB)")
+
+        print("  ▶ Extracting...")
+        try:
+            with zipfile.ZipFile(zip_path, "r") as zf:
+                zf.extractall(DATA_DIR / "ne_10m_admin_0_countries")
+        except Exception as e:
+            print(f"  ✗ Extraction failed: {e}")
+            return None
+
+    if not shp.exists():
+        print(f"  ✗ Shapefile not found after extraction: {shp}")
+        return None
+
+    print(f"  ✔ Shapefile ready")
+    return shp
+
+
+def import_vector_postgis(shp_path, table_name, db_url):
+    """Import an Italy-filtered Shapefile into PostGIS as a vector table via ogr2ogr.
+
+    Drops and recreates the table — idempotent.
+    """
+    print(f"  ▶ Importing Italy boundary into PostGIS table '{table_name}'...")
+
+    # Build a postgresql:// connection string ogr2ogr can consume
+    # ogr2ogr accepts the same DSN format as psql
+    ok, _, err = run([
+        "ogr2ogr",
+        "-f", "PostgreSQL",
+        f"PG:{db_url}",
+        str(shp_path),
+        "-nln", table_name,
+        "-overwrite",
+        "-t_srs", "EPSG:4326",
+        "-where", "NAME = 'Italy'",
+        "-nlt", "MULTIPOLYGON",
+        "-lco", "GEOMETRY_NAME=geom",
+        "-lco", "FID=id",
+        "-lco", "SPATIAL_INDEX=GIST",
+        "-q",
+    ], timeout=120)
+
+    if not ok:
+        print(f"  ✗ ogr2ogr failed: {err[:300]}")
+        return False
+
+    # Verify at least one row was inserted
+    ok2, out, _ = run([
+        "psql", db_url, "-t", "-A",
+        "-c", f"SELECT count(*) FROM {table_name};",
+    ])
+    if ok2 and out.strip() == "1":
+        print(f"  ✔ '{table_name}' imported (1 Italy MultiPolygon row)")
+        return True
+
+    print(f"  ✗ Table '{table_name}' empty after import — check ogr2ogr filter")
+    return False
+
+
 # ─── Dataset Registry ────────────────────────────────────────────────
 
 DATASETS = {
@@ -909,9 +996,17 @@ DATASETS = {
         "handler": handle_aspect,
         "depends": "dem",
     },
+    "italy_boundary": {
+        "label": "Italy National Boundary (Natural Earth 10m)",
+        "critical": True,
+        "table": "italy_boundary",
+        "handler": handle_italy_boundary,
+        # Vector dataset — uses ogr2ogr instead of raster2pgsql
+        "importer": import_vector_postgis,
+    },
 }
 
-DATASET_ORDER = ["corine", "tcd", "dlt", "dem", "soil", "aspect"]
+DATASET_ORDER = ["corine", "tcd", "dlt", "dem", "soil", "aspect", "italy_boundary"]
 
 
 # ─── Main ─────────────────────────────────────────────────────────────
@@ -988,7 +1083,7 @@ def main():
         ds = DATASETS[name]
         print(f"▶ {ds['label']}")
 
-        # Skip WEkEO datasets if not authenticated
+        # Skip WEkEO datasets if not authenticated (italy_boundary uses curl, no auth needed)
         if name in ("corine", "tcd", "dlt") and client is None:
             # Check if raw file already exists
             raw_files = {
@@ -1016,7 +1111,8 @@ def main():
             result_file = None
 
         if result_file and file_ok(result_file, min_bytes=1000):
-            if import_postgis(result_file, ds["table"], db_url):
+            importer = ds.get("importer", import_postgis)
+            if importer(result_file, ds["table"], db_url):
                 imported_tables.append(ds["table"])
             else:
                 if ds["critical"]:
