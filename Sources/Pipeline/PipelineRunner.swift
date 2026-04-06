@@ -1,5 +1,6 @@
 import Foundation
 import Logging
+import SQLKit
 
 actor PipelineRunner {
     private let logger = Logger(label: "funghi.pipeline")
