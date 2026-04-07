@@ -27,16 +27,10 @@ struct TileGenerator: Sendable {
         let phaseStart = ContinuousClock.now
         let raster = ScoreRaster(results: results, bbox: bbox)
 
-        // Compute actual score range for dynamic colormap stretching
-        let scores = results.map(\.score).filter { $0 > 0.001 }
-        let scoreRange: (min: Double, max: Double)? = scores.isEmpty ? nil : (
-            min: scores.min()!,
-            max: scores.max()!
-        )
-        Self.logger.info("Score range for colormap", metadata: [
-            "min": "\(scoreRange?.min ?? 0)",
-            "max": "\(scoreRange?.max ?? 0)",
-            "nonZeroPoints": "\(scores.count)",
+        let visibleScores = results.map(\.score).filter { $0 > Colormap.visibilityThreshold }
+        Self.logger.info("Score distribution", metadata: [
+            "visiblePoints": "\(visibleScores.count)/\(results.count)",
+            "max": "\(visibleScores.max() ?? 0)",
             "rasterSize": "\(raster.width)x\(raster.height)"
         ])
 
@@ -60,7 +54,7 @@ struct TileGenerator: Sendable {
                             minLon: bounds.minLon, maxLon: bounds.maxLon
                         ) else { return nil }
 
-                        return renderTile(coord: coord, raster: raster, scoreRange: scoreRange)
+                        return renderTile(coord: coord, raster: raster)
                     }
                 }
 
@@ -91,8 +85,7 @@ struct TileGenerator: Sendable {
 
     private func renderTile(
         coord: TileMath.TileCoord,
-        raster: ScoreRaster,
-        scoreRange: (min: Double, max: Double)?
+        raster: ScoreRaster
     ) -> GeneratedTile? {
         let size = TileMath.tileSize
         var pixels = [PNG.RGBA<UInt8>](repeating: .init(0, 0, 0, 0), count: size * size)
@@ -106,7 +99,7 @@ struct TileGenerator: Sendable {
                 )
 
                 if let score = raster.sample(latitude: lat, longitude: lon) {
-                    let color = Colormap.color(for: score, scoreRange: scoreRange)
+                    let color = Colormap.color(for: score)
                     pixels[py * size + px] = .init(color.r, color.g, color.b, color.a)
                     if color.a > 0 { hasData = true }
                 }

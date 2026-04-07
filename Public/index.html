@@ -280,7 +280,11 @@
                     wrapper.appendChild(label);
                 }
 
-                const marker = new maplibregl.Marker({ element: wrapper, anchor: 'bottom' })
+                // anchor: 'bottom' pins the layout box bottom to the coordinate.
+                // The rotated diamond's visual tip extends 11*(√2-1) ≈ 4.6px below the
+                // layout box, so we compensate with a negative Y offset so the tip
+                // hits the exact coordinate at every zoom level.
+                const marker = new maplibregl.Marker({ element: wrapper, anchor: 'bottom', offset: [0, -5] })
                     .setLngLat([poi.lon, poi.lat])
                     .addTo(map);
 
