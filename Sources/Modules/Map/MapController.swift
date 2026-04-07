@@ -128,17 +128,11 @@ struct MapController: RouteCollection, Sendable {
             throw Abort(.notFound, reason: "Score raster not found for \(date)")
         }
         let raster = cached.raster
-        let scoreRange = cached.scoreRange
 
-        // Translate the 0–1 slider fraction into an absolute score threshold
-        // relative to today's actual data range, so the filter is meaningful
-        // regardless of season (e.g. 0.5 = "top half of today's scores").
-        let minScore: Double
-        if let range = scoreRange {
-            minScore = range.min + minScoreFraction * (range.max - range.min)
-        } else {
-            minScore = minScoreFraction
-        }
+        // min_score is now an absolute threshold (0.0–1.0), matching the absolute
+        // scoring scale. Always at least the visibility threshold so transparent
+        // points are never sampled.
+        let minScore = max(minScoreFraction, Colormap.visibilityThreshold)
 
         let size = TileMath.tileSize
         var pixels = [PNG.RGBA<UInt8>](repeating: .init(0, 0, 0, 0), count: size * size)
@@ -152,7 +146,7 @@ struct MapController: RouteCollection, Sendable {
                 )
                 if let score = raster.sample(latitude: lat, longitude: lon),
                    score >= minScore {
-                    let color = Colormap.color(for: score, scoreRange: scoreRange)
+                    let color = Colormap.color(for: score)
                     pixels[py * size + px] = .init(color.r, color.g, color.b, color.a)
                     if color.a > 0 { hasData = true }
                 }
