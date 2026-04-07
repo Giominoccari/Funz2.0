@@ -104,6 +104,9 @@ func configure(_ app: Application) async throws {
     app.asyncCommands.use(BenchGeoCommand(), as: "bench-geo")
     app.asyncCommands.use(ForecastEvaluatorCommand(), as: "evaluate")
 
+    // Daily scheduler — runs historical + forecast + evaluate at 02:45 Europe/Rome
+    app.lifecycle.use(DailyScheduler())
+
     // Routes
     try routes(app)
 

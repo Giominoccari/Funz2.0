@@ -54,7 +54,9 @@ struct MapController: RouteCollection, Sendable {
             Self.logger.trace("Serving tile from local storage", metadata: [
                 "path": "\(date)/\(z)/\(x)/\(y).png"
             ])
-            return try await req.fileio.asyncStreamFile(at: localPath)
+            let response = try await req.fileio.asyncStreamFile(at: localPath)
+            response.headers.replaceOrAdd(name: .cacheControl, value: "public, max-age=86400")
+            return response
         }
 
         // 2. Fallback to S3 presigned URL redirect
@@ -266,7 +268,9 @@ struct MapController: RouteCollection, Sendable {
             + "Storage/tiles/forecast/\(date)/\(z)/\(x)/\(y).png"
 
         if FileManager.default.fileExists(atPath: localPath) {
-            return try await req.fileio.asyncStreamFile(at: localPath)
+            let response = try await req.fileio.asyncStreamFile(at: localPath)
+            response.headers.replaceOrAdd(name: .cacheControl, value: "public, max-age=86400")
+            return response
         }
 
         if let s3Config = self.loadS3Config(req: req) {

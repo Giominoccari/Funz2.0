@@ -508,6 +508,12 @@
             if (date) loadOverlay(date);
         };
 
+        // Token-only update: refresh the auth token without reloading tiles.
+        // Used when returning from background so iOS can decide which overlay to reload.
+        window.updateAuthToken = function(token) {
+            if (token) authToken = token;
+        };
+
         // ── Forecast overlay ──
         // Called by MapBridge.loadForecastDate(_:) — switches to forecast tile layer
 
