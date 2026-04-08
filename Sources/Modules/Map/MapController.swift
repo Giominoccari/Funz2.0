@@ -297,10 +297,15 @@ struct MapController: RouteCollection, Sendable {
         }
         let dateFormatter = DateFormatter()
         dateFormatter.dateFormat = "yyyy-MM-dd"
+        dateFormatter.timeZone = TimeZone(identifier: "Europe/Rome")
+
+        // Today in Rome time — only return strictly future dates (forecasts for tomorrow+)
+        let todayString = dateFormatter.string(from: Date())
+
         let dates = contents
-            .filter { dateFormatter.date(from: $0) != nil }
+            .filter { dateFormatter.date(from: $0) != nil && $0 > todayString }
             .sorted()
-        Self.logger.debug("Forecast dates listed", metadata: ["path": "\(forecastDir)", "count": "\(dates.count)", "dates": "\(dates)"])
+        Self.logger.debug("Forecast dates listed", metadata: ["path": "\(forecastDir)", "count": "\(dates.count)", "today": "\(todayString)", "dates": "\(dates)"])
         return dates
     }
 

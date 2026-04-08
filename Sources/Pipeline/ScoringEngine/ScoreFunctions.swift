@@ -48,14 +48,15 @@ enum ScoreFunctions {
     }
 
     /// Soil temperature score: mycelial activity requires warm soil at 0-7cm depth.
-    /// Soil temp is the true biological trigger — more reliable than air temp for fruiting prediction.
+    /// Used as a multiplicative modifier — floor of 0.20 so that cold soil suppresses
+    /// but does not eliminate scores (mycelium remains present and semi-active below 6°C).
     static func soilTempScore(_ avgSoilTemp7d: Double) -> Double {
-        if avgSoilTemp7d < 6 { return 0.0 }
-        if avgSoilTemp7d < 8 { return (avgSoilTemp7d - 6) / 2.0 * 0.5 }
-        if avgSoilTemp7d < 12 { return 0.5 + (avgSoilTemp7d - 8) / 4.0 * 0.5 }
+        if avgSoilTemp7d < 4 { return 0.20 }
+        if avgSoilTemp7d < 8 { return 0.20 + (avgSoilTemp7d - 4) / 4.0 * 0.45 }
+        if avgSoilTemp7d < 12 { return 0.65 + (avgSoilTemp7d - 8) / 4.0 * 0.35 }
         if avgSoilTemp7d <= 22 { return 1.0 }
         if avgSoilTemp7d <= 28 { return 1.0 - (avgSoilTemp7d - 22) / 6.0 * 0.6 }
-        return 0.1
+        return 0.20
     }
 
     /// Altitude score with seasonal adjustment: optimal altitude band shifts by season.
@@ -142,20 +143,22 @@ enum ScoreFunctions {
     }
 
     /// Season score: soft calendar-based gate for Porcini fruiting phenology.
-    /// Floor of 0.10 allows exceptional warm-winter finds (e.g., B. aereus in Mediterranean).
+    /// Based on documented Italian phenology: B. aereus flushes in April in southern
+    /// and coastal zones; B. edulis main season May–October.
+    /// Floor of 0.15 allows exceptional warm-winter finds (e.g., B. aereus Mediterranean).
     static func seasonScore(dayOfYear: Int) -> Double {
         let d = dayOfYear
         // Dec–Feb (335–59): deep winter
-        if d >= 335 || d <= 59 { return 0.10 }
+        if d >= 335 || d <= 59 { return 0.15 }
         // March (60–90): very early spring
-        if d <= 90 { return 0.10 + (Double(d - 60) / 30.0) * 0.15 }
-        // April (91–120): early flushes possible
-        if d <= 120 { return 0.25 + (Double(d - 91) / 30.0) * 0.25 }
+        if d <= 90 { return 0.15 + (Double(d - 60) / 30.0) * 0.15 }
+        // April (91–120): early flushes documented (B. aereus, low-altitude B. edulis)
+        if d <= 120 { return 0.30 + (Double(d - 91) / 30.0) * 0.30 }
         // May (121–152): spring building
-        if d <= 152 { return 0.50 + (Double(d - 121) / 32.0) * 0.40 }
+        if d <= 152 { return 0.60 + (Double(d - 121) / 32.0) * 0.40 }
         // Jun–Oct (153–304): prime season
         if d <= 304 { return 1.0 }
         // Nov (305–334): late autumn decline
-        return 1.0 - (Double(d - 305) / 30.0) * 0.80
+        return 1.0 - (Double(d - 305) / 30.0) * 0.75
     }
 }

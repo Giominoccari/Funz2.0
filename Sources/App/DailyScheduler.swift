@@ -72,6 +72,20 @@ final class DailyScheduler: LifecycleHandler, @unchecked Sendable {
         let sqlDb = app.db as! any SQLDatabase
         let geoClient = BatchGeoEnrichmentClient(db: sqlDb)
 
+        // Step 0 — Cleanup historical tiles older than 2 days
+        await step("cleanup old tiles") {
+            let tilesDir = app.directory.workingDirectory + "Storage/tiles"
+            let cutoff = Self.dateString(daysBack: 2, from: date)
+            let contents = (try? FileManager.default.contentsOfDirectory(atPath: tilesDir)) ?? []
+            let fmt = DateFormatter()
+            fmt.dateFormat = "yyyy-MM-dd"
+            for entry in contents where entry != "forecast" {
+                guard fmt.date(from: entry) != nil, entry < cutoff else { continue }
+                try FileManager.default.removeItem(atPath: "\(tilesDir)/\(entry)")
+                logger.info("Scheduler — removed old tiles", metadata: ["dir": "\(entry)"])
+            }
+        }
+
         // Step 1 — Historical map (today)
         await step("historical map") {
             let weatherRepo = WeatherRepository(db: sqlDb)

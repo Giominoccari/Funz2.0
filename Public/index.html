@@ -12,24 +12,37 @@
         body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; }
         #map { position: absolute; top: 0; bottom: 0; width: 100%; }
 
-        /* ── User location: forest-themed marker ── */
+        /* ── User location marker ── */
         .user-marker-wrapper {
             position: relative;
-            width: 36px; height: 36px;
+            width: 46px; height: 46px;
             display: flex; align-items: center; justify-content: center;
+            isolation: isolate;
         }
         .user-marker-ring {
             position: absolute;
-            width: 36px; height: 36px; border-radius: 50%;
-            background: radial-gradient(circle, rgba(46,204,113,.25) 0%, rgba(46,204,113,0) 70%);
+            width: 46px; height: 46px; border-radius: 50%;
+            background: radial-gradient(circle, rgba(46,204,113,.28) 0%, rgba(46,204,113,0) 70%);
+            transform-origin: center center;
+            will-change: transform, opacity;
             animation: user-ring-pulse 2.5s ease-out infinite;
         }
+        /* Profile photo avatar */
+        .user-marker-photo {
+            position: relative; z-index: 1;
+            width: 36px; height: 36px; border-radius: 50%;
+            border: 3px solid #fff;
+            box-shadow: 0 2px 8px rgba(0,0,0,.45);
+            object-fit: cover;
+            display: none; /* shown once image loads */
+        }
+        /* Fallback green dot (shown when no avatar) */
         .user-marker-dot {
             position: relative; z-index: 1;
-            width: 14px; height: 14px; border-radius: 50%;
+            width: 16px; height: 16px; border-radius: 50%;
             background: linear-gradient(135deg, #2ecc71 0%, #27ae60 100%);
-            border: 2.5px solid #fff;
-            box-shadow: 0 1px 6px rgba(0,0,0,.35);
+            border: 3px solid #fff;
+            box-shadow: 0 2px 8px rgba(0,0,0,.35);
         }
         .user-marker-arrow {
             position: absolute; z-index: 2;
@@ -148,7 +161,7 @@
 
         let currentDate = params.get('date') || new Date().toISOString().slice(0, 10);
         let currentOpacity = 1;
-        let heatThreshold = 1;
+        let heatThreshold = 0;
         let heatShowAll = false;
         let currentMode = 'historical'; // 'historical' | 'forecast'
         let currentForecastDate = null;
@@ -227,9 +240,13 @@
             currentMode = 'historical';
             currentForecastDate = null;
 
+            // If called without explicit score (e.g. from native bridge on date switch),
+            // preserve the current JS threshold so the filter is not silently dropped.
+            const score = (minScore !== undefined) ? minScore : (heatShowAll ? 0 : heatThreshold / 100);
+
             map.addSource(sourceId, {
                 type: 'raster',
-                tiles: [tileURLTemplate(date, minScore)],
+                tiles: [tileURLTemplate(date, score)],
                 tileSize: 256,
                 minzoom: 6,
                 maxzoom: 12
@@ -301,21 +318,57 @@
         // ── User location marker ──
         let userMarker = null;
 
+        function buildUserMarkerElement() {
+            const wrapper = document.createElement('div');
+            wrapper.className = 'user-marker-wrapper';
+
+            const ring = document.createElement('div');
+            ring.className = 'user-marker-ring';
+
+            const photo = document.createElement('img');
+            photo.className = 'user-marker-photo';
+            // Cache-bust so a fresh avatar is loaded after profile edits
+            photo.src = 'funz://user/avatar.png?t=' + Date.now();
+            photo.onload = function() {
+                photo.style.display = 'block';
+                dot.style.display = 'none';
+            };
+            photo.onerror = function() {
+                photo.style.display = 'none';
+                dot.style.display = 'block';
+            };
+
+            const dot = document.createElement('div');
+            dot.className = 'user-marker-dot';
+            // dot visible by default until photo confirms load
+            dot.style.display = 'block';
+
+            wrapper.appendChild(ring);
+            wrapper.appendChild(photo);
+            wrapper.appendChild(dot);
+            return wrapper;
+        }
+
         function setUserLocation(lat, lon) {
             if (!userMarker) {
-                const wrapper = document.createElement('div');
-                wrapper.className = 'user-marker-wrapper';
-                const ring = document.createElement('div');
-                ring.className = 'user-marker-ring';
-                const dot = document.createElement('div');
-                dot.className = 'user-marker-dot';
-                wrapper.appendChild(ring);
-                wrapper.appendChild(dot);
-                userMarker = new maplibregl.Marker({ element: wrapper }).setLngLat([lon, lat]).addTo(map);
+                userMarker = new maplibregl.Marker({ element: buildUserMarkerElement() })
+                    .setLngLat([lon, lat]).addTo(map);
             } else {
                 userMarker.setLngLat([lon, lat]);
             }
         }
+
+        // Reload the avatar photo after a profile photo change (called from Swift)
+        window.refreshUserMarker = function() {
+            if (!userMarker) return;
+            const el = userMarker.getElement();
+            const photo = el.querySelector('.user-marker-photo');
+            const dot = el.querySelector('.user-marker-dot');
+            if (!photo || !dot) return;
+            photo.src = 'funz://user/avatar.png?t=' + Date.now();
+            photo.onload = function() { photo.style.display = 'block'; dot.style.display = 'none'; };
+            photo.onerror = function() { photo.style.display = 'none'; dot.style.display = 'block'; };
+        };
 
         // Lightweight update — moves marker without flyTo (for continuous GPS updates)
         window.updateUserMarker = function(lat, lon) {

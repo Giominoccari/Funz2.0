@@ -41,10 +41,11 @@ struct ScoringEngine: Sendable {
         let soilTempMultiplier = sts
         let weatherScore = rawWeather * humidityMultiplier * soilTempMultiplier
 
-        // Base score gates: no habitat = no mushrooms, regardless of weather.
-        // Direct multiplication: both habitat AND weather must be strong to score high.
-        // The colormap uses absolute thresholds, so no sqrt inflation needed here.
-        let product = baseScore * weatherScore
+        // Habitat is a prerequisite, not an equal driver: sqrt softens the gate so
+        // moderate habitat (0.5) gives 0.71× rather than 0.50× on the weather signal.
+        // No habitat (0.0) still produces 0. Strong habitat (1.0) still gives full weight.
+        // Season multiplier applied last — it is a calendar-based biological gate.
+        let product = baseScore.squareRoot() * weatherScore
         let seasonMultiplier = ScoreFunctions.seasonScore(dayOfYear: input.dayOfYear)
         let finalScore = min(1.0, max(0.0, product * seasonMultiplier))
 

@@ -378,58 +378,64 @@ actor PipelineRunner {
             "forecastDays": "\(forecastDaysToFetch)"
         ])
 
+        // Sequential fetch to respect Open-Meteo rate limits.
+        // Concurrent fetches (withTaskGroup) fire ~81 requests simultaneously,
+        // saturating the per-minute limit and cascading into the hourly limit.
+        // Sequential with a small inter-batch delay keeps throughput within limits.
         let apiBatchSize = 50
         var forecastByCoord = [[DailyObservation]](repeating: [], count: coarsePoints.count)
 
-        let batchCount = (coarsePoints.count + apiBatchSize - 1) / apiBatchSize
-        var batchRanges: [(index: Int, start: Int, end: Int)] = []
-        for (i, batchStart) in stride(from: 0, to: coarsePoints.count, by: apiBatchSize).enumerated() {
-            batchRanges.append((i, batchStart, min(batchStart + apiBatchSize, coarsePoints.count)))
-        }
-        let coordsSnapshot = coords
-        let coarseSnapshot = coarsePoints
+        let totalBatches = (coarsePoints.count + apiBatchSize - 1) / apiBatchSize
+        var fetchedCount = 0
+        let logInterval = max(1, totalBatches / 5)
 
-        let forecastBatchResults = await withTaskGroup(
-            of: (index: Int, results: [(coordIdx: Int, obs: [DailyObservation])]).self,
-            returning: [(index: Int, results: [(coordIdx: Int, obs: [DailyObservation])])].self
-        ) { group in
-            for range in batchRanges {
-                group.addTask { [logger] in
-                    let batchCoords = Array(coordsSnapshot[range.start..<range.end])
-                    do {
-                        let results = try await openMeteoClient.fetchForecastDailyBatch(
-                            coordinates: batchCoords,
-                            forecastDays: forecastDaysToFetch
-                        )
-                        let mapped = results.enumerated().map { (coordIdx: range.start + $0.offset, obs: $0.element) }
-                        return (range.index, mapped)
-                    } catch {
-                        logger.warning("Forecast batch fetch failed", metadata: [
-                            "batchStart": "\(range.start)",
-                            "batchSize": "\(batchCoords.count)",
-                            "error": "\(error)"
-                        ])
-                        let fallback = (range.start..<range.end).map { (coordIdx: $0, obs: [DailyObservation]()) }
-                        return (range.index, fallback)
-                    }
+        for (batchIdx, batchStart) in stride(from: 0, to: coarsePoints.count, by: apiBatchSize).enumerated() {
+            let batchEnd = min(batchStart + apiBatchSize, coarsePoints.count)
+            let batchCoords = Array(coords[batchStart..<batchEnd])
+            do {
+                let results = try await openMeteoClient.fetchForecastDailyBatch(
+                    coordinates: batchCoords,
+                    forecastDays: forecastDaysToFetch
+                )
+                for (offset, obs) in results.enumerated() {
+                    forecastByCoord[batchStart + offset] = obs
                 }
+                fetchedCount += batchCoords.count
+            } catch {
+                logger.warning("Forecast batch fetch failed — using empty weather for batch", metadata: [
+                    "batchStart": "\(batchStart)",
+                    "batchSize": "\(batchCoords.count)",
+                    "error": "\(error)"
+                ])
             }
 
-            var ordered = [(index: Int, results: [(coordIdx: Int, obs: [DailyObservation])])]()
-            ordered.reserveCapacity(batchCount)
-            for await result in group { ordered.append(result) }
-            return ordered
-        }
-
-        for batch in forecastBatchResults {
-            for entry in batch.results {
-                forecastByCoord[entry.coordIdx] = entry.obs
+            if (batchIdx + 1) % logInterval == 0 || batchIdx + 1 == totalBatches {
+                let pct = Int(Double(batchIdx + 1) / Double(totalBatches) * 100)
+                logger.info("Forecast — weather fetch progress", metadata: [
+                    "progress": "\(pct)%",
+                    "batch": "\(batchIdx + 1)/\(totalBatches)"
+                ])
             }
         }
 
         logger.info("Forecast — Open-Meteo fetch complete", metadata: [
             "fetched": "\(forecastByCoord.filter { !$0.isEmpty }.count)/\(coarsePoints.count)"
         ])
+
+        // Remove stale forecast directories (dates ≤ baseDate that are no longer future forecasts)
+        let forecastRootPath = "Storage/tiles/forecast"
+        let dateFmt = DateFormatter()
+        dateFmt.dateFormat = "yyyy-MM-dd"
+        dateFmt.timeZone = TimeZone(identifier: "UTC")
+        if let existing = try? FileManager.default.contentsOfDirectory(atPath: forecastRootPath) {
+            for entry in existing {
+                if dateFmt.date(from: entry) != nil, entry <= baseDate {
+                    let stale = "\(forecastRootPath)/\(entry)"
+                    try? FileManager.default.removeItem(atPath: stale)
+                    logger.info("Forecast — removed stale directory", metadata: ["dir": "\(entry)"])
+                }
+            }
+        }
 
         // Generate one map per forecast day
         let tileGen = TileGenerator(tileZoomMin: config.tileZoomMin, tileZoomMax: config.tileZoomMax)
@@ -447,7 +453,7 @@ actor PipelineRunner {
             coarseWeather.reserveCapacity(coarsePoints.count)
 
             for i in 0..<coarsePoints.count {
-                let cp = coarseSnapshot[i]
+                let cp = coarsePoints[i]
                 let histObs = historicalByIndex[i] ?? []
                 let histWindow = Array(histObs.suffix(14 - d))
 

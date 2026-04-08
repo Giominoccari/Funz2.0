@@ -15,9 +15,9 @@ pipeline:
       soil: 0.20
       aspect: 0.15
     weather:
-      rain14d: 0.40
-      rainTrigger: 0.20
-      temperature: 0.40
+      rain14d: 0.35
+      rainTrigger: 0.35
+      temperature: 0.30
     humidityMultiplierMin: 0.15
   weather:
     baseURL: "https://archive-api.open-meteo.com/v1/archive"
