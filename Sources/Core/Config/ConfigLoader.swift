@@ -5,7 +5,14 @@ import Yams
 enum ConfigLoader {
     private static let logger = Logger(label: "funghi.config")
 
+    // Cached after first successful load — config does not change at runtime.
+    // nonisolated(unsafe) is safe here because cache is written once at startup
+    // (before any concurrent requests) and only read afterwards.
+    private nonisolated(unsafe) static var cached: AppConfig? = nil
+
     static func load(from path: String = "config/app.yaml") throws -> AppConfig {
+        if let cached { return cached }
+
         let url = URL(fileURLWithPath: path)
 
         guard FileManager.default.fileExists(atPath: url.path) else {
@@ -24,6 +31,7 @@ enum ConfigLoader {
         let decoder = YAMLDecoder()
         do {
             let config = try decoder.decode(AppConfig.self, from: yamlString)
+            cached = config
             logger.info("Config loaded", metadata: ["path": "\(path)"])
             return config
         } catch {
