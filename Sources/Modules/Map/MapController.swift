@@ -129,10 +129,14 @@ struct MapController: RouteCollection, Sendable {
         }
         let raster = cached.raster
 
-        // min_score is now an absolute threshold (0.0–1.0), matching the absolute
-        // scoring scale. Always at least the visibility threshold so transparent
-        // points are never sampled.
-        let minScore = max(minScoreFraction, Colormap.visibilityThreshold)
+        // At min_score=0 (no user filter) sample all points and let Colormap decide
+        // transparency — matches TileGenerator.renderTile behaviour so the base map
+        // and filter=0 are visually identical.
+        // At min_score>0 enforce the user threshold (clamped above visibilityThreshold
+        // so we never waste pixels on fully-transparent colours).
+        let minScore: Double = minScoreFraction == 0
+            ? 0
+            : max(minScoreFraction, Colormap.visibilityThreshold)
 
         let size = TileMath.tileSize
         var pixels = [PNG.RGBA<UInt8>](repeating: .init(0, 0, 0, 0), count: size * size)

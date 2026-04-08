@@ -107,6 +107,20 @@ func configure(_ app: Application) async throws {
     // Daily scheduler — runs historical + forecast + evaluate at 02:45 Europe/Rome
     app.lifecycle.use(DailyScheduler())
 
+    // Pre-warm the raster cache for the latest available date so the first
+    // dynamic tile request (filter > 0) does not pay the ~19 MB disk-read cost.
+    Task.detached {
+        let tilesDir = app.directory.workingDirectory + "Storage/tiles"
+        let fmt = DateFormatter()
+        fmt.dateFormat = "yyyy-MM-dd"
+        let dates = (try? FileManager.default.contentsOfDirectory(atPath: tilesDir))
+            ?? []
+        if let latest = dates.filter({ fmt.date(from: $0) != nil }).sorted().last {
+            _ = await RasterCache.shared.get(date: latest, basePath: tilesDir)
+            logger.info("Raster pre-warmed", metadata: ["date": "\(latest)"])
+        }
+    }
+
     // Routes
     try routes(app)
 
