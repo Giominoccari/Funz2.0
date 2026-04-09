@@ -57,6 +57,7 @@ services:
     volumes:
       - ../../Keys:/app/Keys:ro
       - ../../Storage/tiles:/app/Storage/tiles
+      - ../../Storage/logs:/app/Storage/logs
       - ../../.cache:/app/.cache
     ports:
       - "127.0.0.1:8080:8080"
