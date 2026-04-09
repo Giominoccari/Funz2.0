@@ -37,12 +37,18 @@ struct OpenMeteoClient: WeatherClient {
         computeStartDate(from: targetDate, daysBack: 13)
     }
 
+    /// Open-Meteo archive lags 2–5 days. Using today as end_date returns HTTP 400.
+    /// Cap end date to targetDate - 2 so archive requests always hit available data.
+    var archiveEndDate: String {
+        computeStartDate(from: targetDate, daysBack: 2)
+    }
+
     func fetchDaily(latitude: Double, longitude: Double, startDate start: String, endDate end: String) async throws -> [DailyObservation] {
         try await fetchDailyInternal(latitude: latitude, longitude: longitude, start: start, end: end)
     }
 
     func fetchDaily(latitude: Double, longitude: Double) async throws -> [DailyObservation] {
-        try await fetchDailyInternal(latitude: latitude, longitude: longitude, start: startDate, end: targetDate)
+        try await fetchDailyInternal(latitude: latitude, longitude: longitude, start: startDate, end: archiveEndDate)
     }
 
     private func fetchDailyInternal(latitude: Double, longitude: Double, start: String, end: String) async throws -> [DailyObservation] {
@@ -150,7 +156,7 @@ struct OpenMeteoClient: WeatherClient {
     func fetchDailyBatch(
         coordinates: [(latitude: Double, longitude: Double)]
     ) async throws -> [[DailyObservation]] {
-        try await fetchDailyBatchInternal(coordinates: coordinates, start: startDate, end: targetDate)
+        try await fetchDailyBatchInternal(coordinates: coordinates, start: startDate, end: archiveEndDate)
     }
 
     private func fetchDailyBatchInternal(

@@ -31,6 +31,10 @@ struct CachedWeatherClient: WeatherClient {
     private let ttl: Int
     private let targetDate: String
     private let startDate: String
+    /// Upper bound actually available from the archive API (targetDate - 2).
+    /// Used as the ceiling for missing-day computations so incremental fetches
+    /// never request a date the archive endpoint hasn't published yet.
+    private let archiveEndDate: String
     private let expectedDays: Int
     private static let logger = Logger(label: "funghi.pipeline.weather.cache")
 
@@ -47,19 +51,22 @@ struct CachedWeatherClient: WeatherClient {
         self.targetDate = targetDate
         self.repository = repository
 
-        // Compute the 14-day range
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd"
         formatter.timeZone = TimeZone(identifier: "UTC")
+        let cal = Calendar(identifier: .gregorian)
         if let end = formatter.date(from: targetDate),
-           let start = Calendar(identifier: .gregorian).date(byAdding: .day, value: -13, to: end) {
+           let start = cal.date(byAdding: .day, value: -13, to: end),
+           let archiveEnd = cal.date(byAdding: .day, value: -2, to: end) {
             self.startDate = formatter.string(from: start)
-            // Count days inclusive
-            let days = Calendar(identifier: .gregorian).dateComponents([.day], from: start, to: end).day ?? 13
+            self.archiveEndDate = formatter.string(from: archiveEnd)
+            // Count days inclusive up to archiveEnd (what the archive actually has)
+            let days = cal.dateComponents([.day], from: start, to: archiveEnd).day ?? 11
             self.expectedDays = days + 1
         } else {
             self.startDate = targetDate
-            self.expectedDays = 14
+            self.archiveEndDate = targetDate
+            self.expectedDays = 12
         }
     }
 
@@ -83,7 +90,7 @@ struct CachedWeatherClient: WeatherClient {
             let existing = try? await repo.fetchExistingDaily(
                 coordinates: [(latitude: roundedLat, longitude: roundedLon)],
                 from: startDate,
-                to: targetDate
+                to: archiveEndDate
             )
             if let obs = existing?[0], !obs.isEmpty {
                 if obs.count >= expectedDays {
@@ -95,7 +102,7 @@ struct CachedWeatherClient: WeatherClient {
 
                 // Partial — fetch only missing days from API
                 let existingDates = Set(obs.map(\.date))
-                let allDates = Self.generateDateRange(from: startDate, to: targetDate)
+                let allDates = Self.generateDateRange(from: startDate, to: archiveEndDate)
                 let missingDates = allDates.filter { !existingDates.contains($0) }
 
                 if !missingDates.isEmpty, let missStart = missingDates.min(), let missEnd = missingDates.max() {
@@ -207,7 +214,7 @@ struct CachedWeatherClient: WeatherClient {
                 (latitude: rounded[$0].latitude, longitude: rounded[$0].longitude)
             }
             if let dbResults = try? await repo.fetchExistingDaily(
-                coordinates: uncachedCoords, from: startDate, to: targetDate
+                coordinates: uncachedCoords, from: startDate, to: archiveEndDate
             ) {
                 for (j, idx) in redisMissIndices.enumerated() {
                     if let obs = dbResults[j], !obs.isEmpty {
@@ -245,7 +252,7 @@ struct CachedWeatherClient: WeatherClient {
 
         // L2.5: Incremental fetch for partial DB hits — fetch only missing days
         if !partialIndices.isEmpty {
-            let allDates = Self.generateDateRange(from: startDate, to: targetDate)
+            let allDates = Self.generateDateRange(from: startDate, to: archiveEndDate)
             // Find the common set of missing dates (typically the same for all partials)
             let sampleExisting = Set(partialObservations[partialIndices[0]]!.map(\.date))
             let missingDates = allDates.filter { !sampleExisting.contains($0) }
