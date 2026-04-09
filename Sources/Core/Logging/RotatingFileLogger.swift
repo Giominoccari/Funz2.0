@@ -121,7 +121,9 @@ final class RotatingFileWriter: @unchecked Sendable {
 /// - Writes a timestamped line to the appropriate rotating file.
 struct FunghiLogHandler: LogHandler {
     var metadata: Logger.Metadata = [:]
-    var logLevel: Logger.Level
+    var logLevel: Logger.Level {
+        didSet { streamHandler.logLevel = logLevel }
+    }
 
     private let label: String
     private let writer: RotatingFileWriter

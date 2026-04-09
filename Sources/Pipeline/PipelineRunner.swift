@@ -217,7 +217,6 @@ actor PipelineRunner {
         // Compute each ScoreFunction output across all points to find bottlenecks.
         var sumFS = 0.0, sumALS = 0.0, sumSS = 0.0, sumASP = 0.0
         var sumRS = 0.0, sumTRS = 0.0, sumTS = 0.0, sumHS = 0.0, sumSTS = 0.0
-        var sumSeason = 0.0
         let sampleSeason = ScoreFunctions.seasonScore(dayOfYear: dayOfYear)
         for inp in inputs {
             sumFS  += ScoreFunctions.forestScore(inp.point.forestType)
@@ -229,7 +228,6 @@ actor PipelineRunner {
             sumTS  += ScoreFunctions.tempScore(inp.weather.avgTemperature)
             sumHS  += ScoreFunctions.humidityScore(inp.weather.avgHumidity)
             sumSTS += ScoreFunctions.soilTempScore(inp.weather.avgSoilTemp7d)
-            sumSeason += sampleSeason
         }
         let d = Double(n)
 
