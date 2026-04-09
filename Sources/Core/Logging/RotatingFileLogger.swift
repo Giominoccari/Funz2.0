@@ -27,65 +27,93 @@ private enum LogCategory {
 /// renames it to `<basename>-<timestamp>.log` and starts a fresh file.
 /// Keeps at most `maxArchives` rotated copies, deleting the oldest first.
 ///
-/// @unchecked Sendable: all mutable state is protected by `lock`.
+/// @unchecked Sendable: all mutable state is protected by a serial DispatchQueue.
 final class RotatingFileWriter: @unchecked Sendable {
-    private let lock = NSLock()
+    // Serial queue — replaces NSLock to avoid swift-corelibs-foundation NSObject init
+    // issues on Linux with Swift 6.0.
+    private let queue: DispatchQueue
     private let logsDir: URL
     private let basename: String
     private let maxBytes: Int
     private let maxArchives: Int
-    private let fileURL: URL
+    private let filePath: String      // plain String path avoids URL->path bridging in hot path
 
-    private var fileHandle: FileHandle?
+    private var fd: Int32 = -1        // POSIX file descriptor; avoids FileHandle on Linux
     private var currentBytes: Int = 0
 
     init(logsDir: URL, basename: String, maxBytes: Int = 10 * 1024 * 1024, maxArchives: Int = 10) throws {
-        self.logsDir = logsDir
-        self.basename = basename
-        self.maxBytes = maxBytes
+        self.queue     = DispatchQueue(label: "funghi.logwriter.\(basename)")
+        self.logsDir   = logsDir
+        self.basename  = basename
+        self.maxBytes  = maxBytes
         self.maxArchives = maxArchives
-        self.fileURL = logsDir.appendingPathComponent("\(basename).log")
+        self.filePath  = logsDir.appendingPathComponent("\(basename).log").path
         try FileManager.default.createDirectory(at: logsDir, withIntermediateDirectories: true)
-        try openHandleUnsafe()
+        try openFDUnsafe()
     }
 
-    // Call while holding `lock`.
-    private func openHandleUnsafe() throws {
-        let url = fileURL
-        if !FileManager.default.fileExists(atPath: url.path) {
-            FileManager.default.createFile(atPath: url.path, contents: nil)
+    // Call only from `queue`.
+    private func openFDUnsafe() throws {
+        closeFDUnsafe()
+        // O_WRONLY | O_CREAT | O_APPEND: creates if absent, always writes at end.
+        // Avoids FileHandle(forWritingTo:) + seekToEndOfFile() which have
+        // known issues in swift-corelibs-foundation on Linux (Swift 6.0).
+        #if canImport(Glibc)
+        let newFD = Glibc.open(filePath, O_WRONLY | O_CREAT | O_APPEND, 0o644)
+        #else
+        let newFD = Darwin.open(filePath, O_WRONLY | O_CREAT | O_APPEND, 0o644)
+        #endif
+        guard newFD >= 0 else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno),
+                          userInfo: [NSLocalizedDescriptionKey: "open(\(filePath)) failed"])
         }
-        let fh = try FileHandle(forWritingTo: url)
-        fh.seekToEndOfFile()
-        let attrs = try FileManager.default.attributesOfItem(atPath: url.path)
-        currentBytes = (attrs[.size] as? Int) ?? 0
-        fileHandle = fh
+        fd = newFD
+        // Current size = position at EOF (O_APPEND already sought there on open).
+        #if canImport(Glibc)
+        let size = Glibc.lseek(fd, 0, SEEK_END)
+        #else
+        let size = Darwin.lseek(fd, 0, SEEK_END)
+        #endif
+        currentBytes = size >= 0 ? Int(size) : 0
+    }
+
+    // Call only from `queue`.
+    private func closeFDUnsafe() {
+        if fd >= 0 {
+            #if canImport(Glibc)
+            Glibc.close(fd)
+            #else
+            Darwin.close(fd)
+            #endif
+            fd = -1
+        }
     }
 
     func write(_ line: String) {
-        let data = (line + "\n").data(using: .utf8) ?? Data()
-        lock.lock()
-        defer { lock.unlock() }
-        fileHandle?.write(data)
-        currentBytes += data.count
-        if currentBytes >= maxBytes {
-            rotateUnsafe()
+        let bytes = Array((line + "\n").utf8)
+        queue.sync {
+            guard fd >= 0 else { return }
+            #if canImport(Glibc)
+            let written = Glibc.write(fd, bytes, bytes.count)
+            #else
+            let written = Darwin.write(fd, bytes, bytes.count)
+            #endif
+            if written > 0 { currentBytes += written }
+            if currentBytes >= maxBytes { rotateUnsafe() }
         }
     }
 
-    // Call while holding `lock`.
+    // Call only from `queue`.
     private func rotateUnsafe() {
-        fileHandle?.closeFile()
-        fileHandle = nil
-
+        closeFDUnsafe()
         let ts = currentTimestampForFilename()
-        let archiveURL = logsDir.appendingPathComponent("\(basename)-\(ts).log")
-        try? FileManager.default.moveItem(at: fileURL, to: archiveURL)
+        let archivePath = logsDir.appendingPathComponent("\(basename)-\(ts).log").path
+        try? FileManager.default.moveItem(atPath: filePath, toPath: archivePath)
         pruneArchivesUnsafe()
-        try? openHandleUnsafe()
+        try? openFDUnsafe()
     }
 
-    // Call while holding `lock`.
+    // Call only from `queue`.
     private func pruneArchivesUnsafe() {
         let prefix = "\(basename)-"
         guard let files = try? FileManager.default.contentsOfDirectory(
@@ -108,9 +136,7 @@ final class RotatingFileWriter: @unchecked Sendable {
     }
 
     deinit {
-        lock.lock()
-        fileHandle?.closeFile()
-        lock.unlock()
+        queue.sync { closeFDUnsafe() }
     }
 }
 
@@ -133,7 +159,10 @@ struct FunghiLogHandler: LogHandler {
         self.label = label
         self.writer = writer
         self.logLevel = logLevel
-        var sh = StreamLogHandler.standardOutput(label: label)
+        // Pass metadataProvider: nil explicitly — avoids evaluating
+        // LoggingSystem.metadataProvider while the bootstrap lock may be held
+        // (swift-log 1.6 deadlock/crash on Linux).
+        var sh = StreamLogHandler.standardOutput(label: label, metadataProvider: nil)
         sh.logLevel = logLevel
         self.streamHandler = sh
     }
