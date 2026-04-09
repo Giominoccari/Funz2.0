@@ -117,6 +117,8 @@ worker: ## Run historical map pipeline
 worker-trentino: ## Run historical pipeline (Trentino only, faster)
 	docker exec funz-app /app/App worker --bbox trentino
 
+worker-full: worker worker-forecast ## Run historical + forecast pipeline (Italy)
+
 worker-forecast: ## Run forecast pipeline (generates tiles/forecast/YYYY-MM-DD/ for next 5 days)
 	docker exec funz-app /app/App worker --bbox italy --mode forecast
 
