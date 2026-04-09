@@ -34,23 +34,24 @@ final class RotatingFileWriter: @unchecked Sendable {
     private let basename: String
     private let maxBytes: Int
     private let maxArchives: Int
+    private let fileURL: URL
 
     private var fileHandle: FileHandle?
     private var currentBytes: Int = 0
-    private var currentFileURL: URL { logsDir.appendingPathComponent("\(basename).log") }
 
     init(logsDir: URL, basename: String, maxBytes: Int = 10 * 1024 * 1024, maxArchives: Int = 10) throws {
         self.logsDir = logsDir
         self.basename = basename
         self.maxBytes = maxBytes
         self.maxArchives = maxArchives
+        self.fileURL = logsDir.appendingPathComponent("\(basename).log")
         try FileManager.default.createDirectory(at: logsDir, withIntermediateDirectories: true)
         try openHandleUnsafe()
     }
 
     // Call while holding `lock`.
     private func openHandleUnsafe() throws {
-        let url = currentFileURL
+        let url = fileURL
         if !FileManager.default.fileExists(atPath: url.path) {
             FileManager.default.createFile(atPath: url.path, contents: nil)
         }
@@ -79,7 +80,7 @@ final class RotatingFileWriter: @unchecked Sendable {
 
         let ts = currentTimestampForFilename()
         let archiveURL = logsDir.appendingPathComponent("\(basename)-\(ts).log")
-        try? FileManager.default.moveItem(at: currentFileURL, to: archiveURL)
+        try? FileManager.default.moveItem(at: fileURL, to: archiveURL)
         pruneArchivesUnsafe()
         try? openHandleUnsafe()
     }
@@ -211,34 +212,37 @@ extension LoggingSystem {
 }
 
 // MARK: - Thread-safe timestamp helpers
+//
+// Using Calendar/DateComponents rather than C time functions (gettimeofday/gmtime_r)
+// to avoid Swift–Glibc interop edge cases on Linux.
 
-/// Thread-safe ISO-8601 timestamp: "2026-04-09T02:45:23.123Z"
+private let _utcCal: Calendar = {
+    var c = Calendar(identifier: .gregorian)
+    c.timeZone = TimeZone(identifier: "UTC")!
+    return c
+}()
+
+private let _romeCal: Calendar = {
+    var c = Calendar(identifier: .gregorian)
+    c.timeZone = TimeZone(identifier: "Europe/Rome")!
+    return c
+}()
+
+/// Thread-safe ISO-8601 log timestamp: "2026-04-09T02:45:23.123Z"
 func currentTimestamp() -> String {
-    var t = time(nil)
-    var ms: Int32 = 0
-    // Milliseconds via gettimeofday for sub-second precision without DateFormatter overhead.
-    var tv = timeval()
-    gettimeofday(&tv, nil)
-    t = tv.tv_sec
-    ms = Int32(tv.tv_usec / 1000)
-    var tm = tm()
-    gmtime_r(&t, &tm)
+    let now = Date()
+    let c = _utcCal.dateComponents([.year, .month, .day, .hour, .minute, .second, .nanosecond], from: now)
+    let ms = (c.nanosecond ?? 0) / 1_000_000
     return String(format: "%04d-%02d-%02dT%02d:%02d:%02d.%03dZ",
-                  tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
-                  tm.tm_hour, tm.tm_min, tm.tm_sec, ms)
+                  c.year ?? 0, c.month ?? 0, c.day ?? 0,
+                  c.hour ?? 0, c.minute ?? 0, c.second ?? 0, ms)
 }
 
-/// Timestamp safe for use in filenames: "2026-04-09T02-45-23"
+/// Timestamp safe for use in filenames (Rome time): "2026-04-09T02-45-23"
 func currentTimestampForFilename() -> String {
-    var tv = timeval()
-    gettimeofday(&tv, nil)
-    var t = tv.tv_sec
-    var tm = tm()
-    // Use Europe/Rome for filename timestamps so they're human-readable for the operator.
-    let tz = TimeZone(identifier: "Europe/Rome")!
-    t += Int(tz.secondsFromGMT())
-    gmtime_r(&t, &tm)
+    let now = Date()
+    let c = _romeCal.dateComponents([.year, .month, .day, .hour, .minute, .second], from: now)
     return String(format: "%04d-%02d-%02dT%02d-%02d-%02d",
-                  tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
-                  tm.tm_hour, tm.tm_min, tm.tm_sec)
+                  c.year ?? 0, c.month ?? 0, c.day ?? 0,
+                  c.hour ?? 0, c.minute ?? 0, c.second ?? 0)
 }
