@@ -13,8 +13,10 @@ struct OpenMeteoClient: WeatherClient {
     private let rateLimiter: TokenBucketRateLimiter
     private let concurrencySemaphore: AsyncSemaphore
     private static let logger = Logger(label: "funghi.pipeline.weather.openmeteo")
+    /// When set, every successful API response body is written to a per-date JSON file.
+    let responseLogger: OpenMeteoResponseLogger?
 
-    init(httpClient: HTTPClient, targetDate: String, config: WeatherConfig) {
+    init(httpClient: HTTPClient, targetDate: String, config: WeatherConfig, responseLogger: OpenMeteoResponseLogger? = nil) {
         self.httpClient = httpClient
         self.baseURL = config.baseURL
         self.targetDate = targetDate
@@ -28,6 +30,7 @@ struct OpenMeteoClient: WeatherClient {
         )
         // Concurrency cap: limit in-flight HTTP connections
         self.concurrencySemaphore = AsyncSemaphore(value: config.maxConcurrentRequests)
+        self.responseLogger = responseLogger
     }
 
     var startDate: String {
@@ -222,6 +225,9 @@ struct OpenMeteoClient: WeatherClient {
                 let maxSize = 1024 * 256 * coordinates.count
                 let body = try await response.body.collect(upTo: maxSize)
                 let data = Data(buffer: body)
+                if let rl = responseLogger {
+                    await rl.logHistorical(firstLat: rounded[0].lat, firstLon: rounded[0].lon, data: data)
+                }
                 return try Self.parseDailyBatchResponse(data, coordinates: rounded)
             } catch let error as WeatherFetchError {
                 throw error
@@ -348,6 +354,9 @@ struct OpenMeteoClient: WeatherClient {
                 let maxSize = 1024 * 256 * coordinates.count
                 let body = try await response.body.collect(upTo: maxSize)
                 let data = Data(buffer: body)
+                if let rl = responseLogger {
+                    await rl.logForecast(firstLat: rounded[0].lat, firstLon: rounded[0].lon, data: data)
+                }
                 return try Self.parseDailyBatchResponse(data, coordinates: rounded)
             } catch let error as WeatherFetchError {
                 throw error

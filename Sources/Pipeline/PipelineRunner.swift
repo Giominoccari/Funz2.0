@@ -114,6 +114,8 @@ actor PipelineRunner {
             "totalDuration": "\(ContinuousClock.now - runStart)"
         ])
 
+        logScoringDiagnostics(engine: engine, inputs: inputs, results: results, date: date, dayOfYear: dayOfYear)
+
         return results
     }
 
@@ -161,6 +163,144 @@ actor PipelineRunner {
             "totalDuration": "\(ContinuousClock.now - fullStart)"
         ])
     }
+
+    // MARK: - Scoring diagnostics
+
+    /// Logs a detailed scoring breakdown after every pipeline run.
+    ///
+    /// Emits three groups of log lines:
+    ///   1. Weather variable statistics — reveals zero-data points and distribution shape.
+    ///   2. Score component distributions — pinpoints which function is suppressing scores.
+    ///   3. Representative point breakdowns — top, mid, and tail scorers with full formula trace.
+    private func logScoringDiagnostics(
+        engine: ScoringEngine,
+        inputs: [ScoringEngine.Input],
+        results: [ScoringEngine.Result],
+        date: String,
+        dayOfYear: Int
+    ) {
+        guard !inputs.isEmpty else { return }
+
+        let n = inputs.count
+
+        // ── 1. Weather data statistics ────────────────────────────────────────────────
+        let weathers = inputs.map(\.weather)
+        let zeroWeather = weathers.filter {
+            $0.rain14d == 0 && $0.avgTemperature == 0 && $0.avgHumidity == 0
+        }.count
+
+        func stats(_ values: [Double]) -> (min: Double, avg: Double, max: Double) {
+            let mn = values.min() ?? 0
+            let mx = values.max() ?? 0
+            let av = values.reduce(0, +) / Double(max(1, values.count))
+            return (mn, av, mx)
+        }
+
+        let rainStats    = stats(weathers.map(\.rain14d))
+        let rain2dStats  = stats(weathers.map(\.maxRain2d))
+        let tempStats    = stats(weathers.map(\.avgTemperature))
+        let humStats     = stats(weathers.map(\.avgHumidity))
+        let soilTStats   = stats(weathers.map(\.avgSoilTemp7d))
+
+        let weatherMeta: Logger.Metadata = [
+            "date": "\(date)",
+            "zeroWeatherPoints": "\(zeroWeather)/\(n)",
+            "rain14d_mm":    "min=\(fmt(rainStats.min))  avg=\(fmt(rainStats.avg))  max=\(fmt(rainStats.max))",
+            "maxRain2d_mm":  "min=\(fmt(rain2dStats.min)) avg=\(fmt(rain2dStats.avg)) max=\(fmt(rain2dStats.max))",
+            "avgTemp_C":     "min=\(fmt(tempStats.min))  avg=\(fmt(tempStats.avg))  max=\(fmt(tempStats.max))",
+            "avgHumidity_%": "min=\(fmt(humStats.min))  avg=\(fmt(humStats.avg))  max=\(fmt(humStats.max))",
+            "avgSoilTemp_C": "min=\(fmt(soilTStats.min)) avg=\(fmt(soilTStats.avg)) max=\(fmt(soilTStats.max))"
+        ]
+        logger.info("Scoring diag — weather inputs", metadata: weatherMeta)
+
+        // ── 2. Score component distributions (sample all points) ─────────────────────
+        // Compute each ScoreFunction output across all points to find bottlenecks.
+        var sumFS = 0.0, sumALS = 0.0, sumSS = 0.0, sumASP = 0.0
+        var sumRS = 0.0, sumTRS = 0.0, sumTS = 0.0, sumHS = 0.0, sumSTS = 0.0
+        var sumSeason = 0.0
+        let sampleSeason = ScoreFunctions.seasonScore(dayOfYear: dayOfYear)
+        for inp in inputs {
+            sumFS  += ScoreFunctions.forestScore(inp.point.forestType)
+            sumALS += ScoreFunctions.altitudeScore(inp.point.altitude, dayOfYear: dayOfYear)
+            sumSS  += ScoreFunctions.soilScore(inp.point.soilType)
+            sumASP += ScoreFunctions.aspectScore(inp.point.aspect)
+            sumRS  += ScoreFunctions.rainScore(inp.weather.rain14d)
+            sumTRS += ScoreFunctions.rainTriggerScore(inp.weather.maxRain2d)
+            sumTS  += ScoreFunctions.tempScore(inp.weather.avgTemperature)
+            sumHS  += ScoreFunctions.humidityScore(inp.weather.avgHumidity)
+            sumSTS += ScoreFunctions.soilTempScore(inp.weather.avgSoilTemp7d)
+            sumSeason += sampleSeason
+        }
+        let d = Double(n)
+
+        let componentMeta: Logger.Metadata = [
+            "date": "\(date)",
+            "dayOfYear": "\(dayOfYear)",
+            "seasonMultiplier": "\(fmt(sampleSeason))",
+            "forest_avg":        "\(fmt(sumFS / d))",
+            "altitude_avg":      "\(fmt(sumALS / d))",
+            "soil_avg":          "\(fmt(sumSS / d))",
+            "aspect_avg":        "\(fmt(sumASP / d))",
+            "rainScore_avg":     "\(fmt(sumRS / d))",
+            "rainTrigger_avg":   "\(fmt(sumTRS / d))",
+            "tempScore_avg":     "\(fmt(sumTS / d))",
+            "humidityScore_avg": "\(fmt(sumHS / d))",
+            "soilTempScore_avg": "\(fmt(sumSTS / d))"
+        ]
+        logger.info("Scoring diag — component averages", metadata: componentMeta)
+
+        // ── 3. Final score histogram ──────────────────────────────────────────────────
+        var buckets = [Int](repeating: 0, count: 10)
+        for r in results {
+            let b = min(9, Int(r.score * 10))
+            buckets[b] += 1
+        }
+        let histStr = (0..<10).map { i in
+            "\(i*10)-\(i*10+10)%: \(buckets[i])"
+        }.joined(separator: ", ")
+        logger.info("Scoring diag — score histogram", metadata: [
+            "date": "\(date)",
+            "histogram": "\(histStr)"
+        ])
+
+        // ── 4. Representative point breakdowns ───────────────────────────────────────
+        // Pick top 5, 5 from middle, 5 from bottom (non-zero) by final score.
+        let indexed = results.enumerated().map { ($0.offset, $0.element.score) }
+        let sorted = indexed.sorted { $0.1 > $1.1 }
+
+        let nonZero = sorted.filter { $0.1 > 0 }
+        var sampleIndices: [Int] = []
+        sampleIndices += sorted.prefix(5).map(\.0)                          // top 5
+        if nonZero.count >= 10 {
+            let midStart = nonZero.count / 2 - 2
+            sampleIndices += nonZero[max(0,midStart)..<min(nonZero.count, midStart+5)].map(\.0) // mid 5
+        }
+        sampleIndices += nonZero.suffix(5).map(\.0)                         // bottom non-zero 5
+
+        for (rank, idx) in sampleIndices.enumerated() {
+            guard idx < inputs.count else { continue }
+            let b = engine.diagnose(inputs[idx])
+            let ptMeta: Logger.Metadata = [
+                "rank": "\(rank+1)/\(sampleIndices.count)",
+                "lat": "\(fmt(b.latitude))", "lon": "\(fmt(b.longitude))",
+                "alt_m": "\(fmt(b.altitude))",
+                "forest": "\(b.forestType)", "soil": "\(b.soilType)", "aspect": "\(fmt(b.aspect))",
+                "rain14d": "\(fmt(b.rain14d))", "maxRain2d": "\(fmt(b.maxRain2d))",
+                "temp": "\(fmt(b.avgTemperature))", "hum%": "\(fmt(b.avgHumidity))", "soilT": "\(fmt(b.avgSoilTemp7d))",
+                "fS": "\(fmt(b.forestScore))", "aS": "\(fmt(b.altitudeScore))",
+                "sS": "\(fmt(b.soilScore))", "aspS": "\(fmt(b.aspectScore))",
+                "base": "\(fmt(b.baseScore))", "sqrtBase": "\(fmt(b.sqrtBaseScore))",
+                "rS": "\(fmt(b.rainScore))", "trS": "\(fmt(b.rainTriggerScore))",
+                "tS": "\(fmt(b.tempScore))", "hMult": "\(fmt(b.humidityMultiplier))",
+                "sTMult": "\(fmt(b.soilTempScore))", "weather": "\(fmt(b.weatherScore))",
+                "season": "\(fmt(b.seasonMultiplier))", "final": "\(fmt(b.finalScore))"
+            ]
+            logger.info("Scoring diag — point breakdown", metadata: ptMeta)
+        }
+    }
+
+    /// Compact 3-decimal formatter for diagnostic log values.
+    private func fmt(_ v: Double) -> String { String(format: "%.3f", v) }
 
     private func enrichWithGeoData(_ points: [GridPoint]) async -> [GridPoint] {
         let sqlBatchSize = config.resolvedGeoBatchSize
@@ -477,6 +617,7 @@ actor PipelineRunner {
                 return ScoringEngine.Input(point: point, weather: weatherMap[key] ?? defaultWeather, dayOfYear: dayOfYear)
             }
             let results = engine.scoreBatch(inputs)
+            logScoringDiagnostics(engine: engine, inputs: inputs, results: results, date: forecastDate, dayOfYear: dayOfYear)
 
             let output = await tileGen.generateAll(results: results, bbox: bbox)
 

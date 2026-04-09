@@ -86,6 +86,9 @@ final class DailyScheduler: LifecycleHandler, @unchecked Sendable {
             }
         }
 
+        // Shared response logger — writes raw Open-Meteo JSON to Storage/logs/openmeteo/{date}/
+        let responseLogger = OpenMeteoResponseLogger(date: date)
+
         // Step 1 — Historical map (today)
         await step("historical map") {
             let weatherRepo = WeatherRepository(db: sqlDb)
@@ -95,7 +98,8 @@ final class DailyScheduler: LifecycleHandler, @unchecked Sendable {
             let openMeteo = OpenMeteoClient(
                 httpClient: app.http.client.shared,
                 targetDate: date,
-                config: config.pipeline.weather
+                config: config.pipeline.weather,
+                responseLogger: responseLogger
             )
             let weatherClient: any WeatherClient = CachedWeatherClient(
                 inner: openMeteo,
@@ -118,7 +122,8 @@ final class DailyScheduler: LifecycleHandler, @unchecked Sendable {
             let openMeteo = OpenMeteoClient(
                 httpClient: app.http.client.shared,
                 targetDate: date,
-                config: config.pipeline.weather
+                config: config.pipeline.weather,
+                responseLogger: responseLogger
             )
             let runner = PipelineRunner(
                 config: config.pipeline,
