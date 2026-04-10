@@ -549,8 +549,11 @@ actor PipelineRunner {
         // L2: API — sequential fetch for cache misses
         let totalBatches = (apiMissIndices.count + apiBatchSize - 1) / apiBatchSize
         let logInterval = max(1, totalBatches / 5)
+        var dailyQuotaExhausted = false
 
         for (batchIdx, batchStart) in stride(from: 0, to: apiMissIndices.count, by: apiBatchSize).enumerated() {
+            if dailyQuotaExhausted { break }
+
             let batchEnd = min(batchStart + apiBatchSize, apiMissIndices.count)
             let batchMissIndices = Array(apiMissIndices[batchStart..<batchEnd])
             let batchCoords = batchMissIndices.map { (latitude: coarsePoints[$0].lat, longitude: coarsePoints[$0].lon) }
@@ -570,6 +573,12 @@ actor PipelineRunner {
                         try? await cache.set(key: key, observations: obs, ttl: 26 * 3600)
                     }
                 }
+            } catch WeatherFetchError.dailyQuotaExceeded {
+                logger.error("Forecast — Open-Meteo daily quota exceeded, aborting remaining batches", metadata: [
+                    "completedBatches": "\(batchIdx)",
+                    "remainingBatches": "\(totalBatches - batchIdx)"
+                ])
+                dailyQuotaExhausted = true
             } catch {
                 logger.warning("Forecast batch fetch failed — using empty weather for batch", metadata: [
                     "batchStart": "\(batchStart)",

@@ -82,7 +82,7 @@ struct OpenMeteoClient: WeatherClient {
                     )
                     let delay: Int
                     if status == 429 {
-                        delay = Self.rateLimitDelay(body: errorText)
+                        delay = try Self.rateLimitDelay(body: errorText)
                     } else {
                         let baseDelay = retryBaseDelayMs * (1 << attempt)
                         delay = baseDelay + Int.random(in: 0...(baseDelay / 2))
@@ -206,7 +206,7 @@ struct OpenMeteoClient: WeatherClient {
 
                     let delay: Int
                     if status == 429 {
-                        delay = Self.rateLimitDelay(body: errorText)
+                        delay = try Self.rateLimitDelay(body: errorText)
                     } else {
                         let baseDelay = retryBaseDelayMs * (1 << attempt)
                         delay = baseDelay + Int.random(in: 0...(baseDelay / 2))
@@ -335,7 +335,7 @@ struct OpenMeteoClient: WeatherClient {
                     )
                     let delay: Int
                     if status == 429 {
-                        delay = Self.rateLimitDelay(body: errorText)
+                        delay = try Self.rateLimitDelay(body: errorText)
                     } else {
                         let baseDelay = retryBaseDelayMs * (1 << attempt)
                         delay = baseDelay + Int.random(in: 0...(baseDelay / 2))
@@ -407,7 +407,7 @@ struct OpenMeteoClient: WeatherClient {
                     lastError = WeatherFetchError.httpError(
                         statusCode: UInt(status), latitude: roundedLat, longitude: roundedLon
                     )
-                    let delay = status == 429
+                    let delay = try status == 429
                         ? Self.rateLimitDelay(body: errorText)
                         : retryBaseDelayMs * (1 << attempt) + Int.random(in: 0...(retryBaseDelayMs / 2))
                     try await Task.sleep(for: .milliseconds(delay))
@@ -438,10 +438,12 @@ struct OpenMeteoClient: WeatherClient {
 
     // MARK: - Helpers
 
-    /// Returns the appropriate retry delay in milliseconds for a 429 response.
-    /// - Minutely limit: wait ~60s
-    /// - Hourly limit: wait until the start of the next hour
-    private static func rateLimitDelay(body: String) -> Int {
+    /// Returns the appropriate retry delay in milliseconds for a 429 response,
+    /// or throws `dailyQuotaExceeded` immediately if the daily limit is hit.
+    private static func rateLimitDelay(body: String) throws -> Int {
+        if body.contains("Daily") {
+            throw WeatherFetchError.dailyQuotaExceeded
+        }
         if body.contains("Hourly") {
             // Wait until the next hour boundary (e.g. 8:47 → wait 13 minutes)
             var cal = Calendar(identifier: .gregorian)
