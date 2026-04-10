@@ -562,11 +562,12 @@ actor PipelineRunner {
                 for (offset, obs) in results.enumerated() {
                     let coordIdx = batchMissIndices[offset]
                     forecastByCoord[coordIdx] = obs
-                    // Store in Redis for next run (23h TTL — refreshes daily)
+                    // Store in Redis for next run (26h TTL — scheduler fires at 02:44 daily,
+                    // 23h would expire at 01:44 next day, 1h before the next run)
                     if let cache = forecastCache, !obs.isEmpty {
                         let coord = coarsePoints[coordIdx]
                         let key = "forecast_obs:\(coord.lat):\(coord.lon):\(baseDate)"
-                        try? await cache.set(key: key, observations: obs, ttl: 23 * 3600)
+                        try? await cache.set(key: key, observations: obs, ttl: 26 * 3600)
                     }
                 }
             } catch {

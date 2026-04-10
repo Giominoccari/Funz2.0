@@ -13,15 +13,20 @@ enum Colormap {
     // Absolute score → color mapping. No dynamic stretching.
     //
     // Using absolute thresholds means the map correctly reflects the season:
-    // off-season scores (~0.05–0.20) render as faint blue-purple or transparent,
-    // while prime-season scores (0.5+) render as orange-red.
+    // off-season scores (~0.05–0.20) render as faint haze,
+    // while prime-season scores (0.5+) render as saturated orange-red.
     //
     // Visibility threshold: scores below this are fully transparent.
-    // Set to 0.12 so that marginal off-season areas don't clutter the map.
+    // Set to 0.03 so that Italy is mostly covered with a faint heat fog.
+    //
+    // Alpha curve: power function score^0.4 gives steep rise in the off-season
+    // range (0.03–0.40) so low-probability areas are visually differentiated
+    // rather than all mapping to the same near-flat blue haze.
+    // Range: ~39 (at 0.03) → ~137 (at 0.39) → ~200 (at 1.0)
     //
     // Color ramp: Cool blue-purple (low) → Warm amber-orange (high)
     // Designed to be visible over both satellite imagery and green terrain.
-    static let visibilityThreshold: Double = 0.12
+    static let visibilityThreshold: Double = 0.03
 
     static func color(for score: Double) -> RGBA {
         let clamped = min(1.0, max(0.0, score))
@@ -30,8 +35,10 @@ enum Colormap {
             return .transparent
         }
 
-        // Alpha scales with score: low scores are subtle, high scores pop
-        let alpha = UInt8(70 + clamped * 110)  // 70–180 range
+        // Power-curve alpha: steeper rise at low scores than a linear ramp.
+        // This gives clear contrast in the off-season 0.03–0.40 range where
+        // a linear mapping would produce a nearly uniform flat appearance.
+        let alpha = UInt8(pow(clamped, 0.4) * 200)  // ~39–200 range
 
         let r: Double
         let g: Double

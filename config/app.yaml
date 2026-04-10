@@ -24,7 +24,7 @@ pipeline:
     maxConcurrentRequests: 2
     retryMaxAttempts: 10
     retryBaseDelayMs: 2000
-    cacheTTLSeconds: 86400
+    cacheTTLSeconds: 93600  # 26h — scheduler runs at 02:44 daily; 24h would expire exactly at the next run
     rateLimitPerSecond: 5
     rateLimitBurst: 2
     # Coarse grid step in degrees. Each unique cell = 1 Open-Meteo request.
