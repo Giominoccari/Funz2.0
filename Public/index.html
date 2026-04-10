@@ -187,6 +187,14 @@
         // ── Map initialization ──
         const map = new maplibregl.Map({
             container: 'map',
+            // Force JPEG for ESRI satellite tiles — WKWebView sends Accept: image/webp
+            // which causes ESRI to return WEBP tiles. iOS's WEBP decoder fails on certain
+            // tile variants (err=-50), causing repeated decode errors and WebContent crashes.
+            transformRequest: (url, resourceType) => {
+                if (resourceType === 'Tile' && url.includes('arcgisonline.com')) {
+                    return { url, headers: { 'Accept': 'image/jpeg,image/png,image/*;q=0.8,*/*;q=0.5' } };
+                }
+            },
             style: {
                 version: 8,
                 sources: {
@@ -551,18 +559,16 @@
             }
         });
 
-        // ── Forward console.log to native jsLogger handler (for debugging) ──
-        (function() {
-            const origLog = console.log;
-            console.log = function() {
-                origLog.apply(console, arguments);
-                if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.jsLogger) {
-                    window.webkit.messageHandlers.jsLogger.postMessage(
-                        Array.from(arguments).map(String).join(' ')
-                    );
-                }
-            };
-        })();
+        // ── Forward explicit app-level debug messages to native jsLogger ──
+        // NOTE: Do NOT intercept console.log globally — MapLibre logs heavily during
+        // tile loading and each postMessage is a synchronous IPC call to the UI process.
+        // Forwarding all logs causes hundreds of IPC round-trips that make the
+        // WebContent process unresponsive on iOS. Use nativeLog() for intentional debug.
+        window.nativeLog = function(msg) {
+            if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.jsLogger) {
+                window.webkit.messageHandlers.jsLogger.postMessage(String(msg));
+            }
+        };
 
         // Called by native after token refresh — updates token and reloads tiles with correct date
         window.setMapAuth = function(token, date) {
@@ -630,7 +636,7 @@
         // ── Init ──
         map.on('load', () => {
             loadOverlay(currentDate);
-            console.log('Funghi Map loaded', { date: currentDate, lat: initLat, lon: initLon });
+            nativeLog('Funghi Map loaded date=' + currentDate);
         });
     </script>
 </body>
