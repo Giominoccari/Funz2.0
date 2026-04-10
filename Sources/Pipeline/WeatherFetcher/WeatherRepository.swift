@@ -179,12 +179,13 @@ actor WeatherRepository {
         from: String,
         to: String
     ) async throws -> NearestPointResult? {
+        // Find nearest grid point from all stored observations (no date filter),
+        // so that requests for future dates (forecast range) still resolve a point.
         let nearestRows = try await db.raw("""
             SELECT latitude, longitude
             FROM (
                 SELECT DISTINCT latitude, longitude
                 FROM weather_observations
-                WHERE observed_date BETWEEN CAST(\(bind: from) AS date) AND CAST(\(bind: to) AS date)
             ) AS pts
             ORDER BY (latitude - \(bind: latitude)) * (latitude - \(bind: latitude))
                    + (longitude - \(bind: longitude)) * (longitude - \(bind: longitude))
