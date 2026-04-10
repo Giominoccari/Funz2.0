@@ -58,7 +58,7 @@ build: ## Build app Docker image without starting
 	@echo "✔ Image rebuilt"
 
 rebuild: ## Rebuild image and restart app (DB + Redis stay up)
-	$(COMPOSE) build app
+	$(COMPOSE) build --no-cache app
 	$(COMPOSE) up -d app --wait --force-recreate
 	@echo "✔ App rebuilt and restarted"
 
