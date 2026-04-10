@@ -246,9 +246,6 @@
             if (map.getLayer(layerId)) map.removeLayer(layerId);
             if (map.getSource(sourceId)) map.removeSource(sourceId);
 
-            // Bump cache-buster so WKWebView never serves stale tiles
-            tileCacheVersion = Date.now();
-
             currentDate = date;
             currentMode = 'historical';
             currentForecastDate = null;
@@ -596,9 +593,6 @@
             if (!date) return;
             currentMode = 'forecast';
             currentForecastDate = date;
-
-            // Bump cache-buster so WKWebView never serves stale tiles
-            tileCacheVersion = Date.now();
 
             const sourceId = 'funghi-tiles';
             const layerId = 'funghi-layer';
