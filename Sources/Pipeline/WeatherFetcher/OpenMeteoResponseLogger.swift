@@ -1,42 +1,45 @@
 import Foundation
 
-/// Writes raw Open-Meteo JSON responses to per-date files under `Storage/logs/openmeteo/{date}/`.
-/// Each successful batch response gets its own file, named by type, sequential index, and
-/// first-coordinate location so responses are individually inspectable with any JSON tool.
+/// Writes raw Open-Meteo JSON responses to two JSONL files under `Storage/logs/openmeteo/{date}/`.
+/// Each response is appended as one line (newline-delimited JSON) to:
+///   - `historical.jsonl` — archive API responses
+///   - `forecast.jsonl`   — forecast API responses
 ///
-/// File naming: `historical_001_45.20_9.40.json` / `forecast_001_45.20_9.40.json`
-/// File content: raw JSON body exactly as received from Open-Meteo API.
-///
-/// actor guarantees thread-safe counter increments even when batches complete concurrently.
+/// actor guarantees thread-safe file appends even when batches complete concurrently.
 actor OpenMeteoResponseLogger {
-    private let dir: String
-    private var historicalCounter: Int = 0
-    private var forecastCounter: Int = 0
+    private let historicalURL: URL
+    private let forecastURL: URL
 
     /// - Parameters:
     ///   - date: The pipeline target date ("YYYY-MM-DD"), used as a subdirectory.
     ///   - baseDir: Root under which `{date}/` is created. Defaults to `Storage/logs/openmeteo`.
     init(date: String, baseDir: String = "Storage/logs/openmeteo") {
-        self.dir = "\(baseDir)/\(date)"
-        try? FileManager.default.createDirectory(atPath: self.dir, withIntermediateDirectories: true)
+        let dir = "\(baseDir)/\(date)"
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        self.historicalURL = URL(fileURLWithPath: "\(dir)/historical.jsonl")
+        self.forecastURL = URL(fileURLWithPath: "\(dir)/forecast.jsonl")
     }
 
-    /// Log a raw historical batch response.
+    /// Append a raw historical batch response as one line.
     func logHistorical(firstLat: Double, firstLon: Double, data: Data) {
-        historicalCounter += 1
-        write(kind: "historical", index: historicalCounter, firstLat: firstLat, firstLon: firstLon, data: data)
+        append(data: data, to: historicalURL)
     }
 
-    /// Log a raw forecast batch response.
+    /// Append a raw forecast batch response as one line.
     func logForecast(firstLat: Double, firstLon: Double, data: Data) {
-        forecastCounter += 1
-        write(kind: "forecast", index: forecastCounter, firstLat: firstLat, firstLon: firstLon, data: data)
+        append(data: data, to: forecastURL)
     }
 
-    private func write(kind: String, index: Int, firstLat: Double, firstLon: Double, data: Data) {
-        let idx = String(format: "%03d", index)
-        let loc = String(format: "%.2f_%.2f", firstLat, firstLon)
-        let filename = "\(dir)/\(kind)_\(idx)_\(loc).json"
-        try? data.write(to: URL(fileURLWithPath: filename))
+    private func append(data: Data, to url: URL) {
+        var line = data
+        line.append(0x0A) // newline
+        if FileManager.default.fileExists(atPath: url.path) {
+            guard let handle = try? FileHandle(forWritingTo: url) else { return }
+            defer { try? handle.close() }
+            handle.seekToEndOfFile()
+            handle.write(line)
+        } else {
+            try? line.write(to: url)
+        }
     }
 }
