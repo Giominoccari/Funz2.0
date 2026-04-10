@@ -466,7 +466,8 @@ actor PipelineRunner {
         baseDate: String,
         days: Int = 5,
         openMeteoClient: OpenMeteoClient,
-        db: any SQLDatabase
+        db: any SQLDatabase,
+        forecastCache: (any ForecastObsCache)? = nil
     ) async throws {
         let fullStart = ContinuousClock.now
         let defaultWeather = WeatherData(rain14d: 0, maxRain2d: 0, avgTemperature: 0, avgHumidity: 0, avgSoilTemp7d: 0)
@@ -516,29 +517,58 @@ actor PipelineRunner {
             "forecastDays": "\(forecastDaysToFetch)"
         ])
 
-        // Sequential fetch to respect Open-Meteo rate limits.
-        // Concurrent fetches (withTaskGroup) fire ~81 requests simultaneously,
-        // saturating the per-minute limit and cascading into the hourly limit.
-        // Sequential with a small inter-batch delay keeps throughput within limits.
+        // Fetch forecast observations: check Redis cache first, only call API for misses.
+        // Key: "forecast_obs:<lat>:<lon>:<baseDate>", TTL 23h.
+        // This avoids re-fetching ~4037 points on every run (same daily quota as historical).
         let apiBatchSize = 50
         var forecastByCoord = [[DailyObservation]](repeating: [], count: coarsePoints.count)
 
-        let totalBatches = (coarsePoints.count + apiBatchSize - 1) / apiBatchSize
-        var fetchedCount = 0
+        // L1: Redis — populate hits, collect miss indices
+        var apiMissIndices: [Int] = []
+        if let cache = forecastCache {
+            for (i, coord) in coarsePoints.enumerated() {
+                let key = "forecast_obs:\(coord.lat):\(coord.lon):\(baseDate)"
+                if let cached = try? await cache.get(key: key) {
+                    forecastByCoord[i] = cached
+                } else {
+                    apiMissIndices.append(i)
+                }
+            }
+        } else {
+            apiMissIndices = Array(coarsePoints.indices)
+        }
+
+        let cacheHits = coarsePoints.count - apiMissIndices.count
+        if cacheHits > 0 {
+            logger.info("Forecast — cache hits", metadata: [
+                "cached": "\(cacheHits)",
+                "apiNeeded": "\(apiMissIndices.count)"
+            ])
+        }
+
+        // L2: API — sequential fetch for cache misses
+        let totalBatches = (apiMissIndices.count + apiBatchSize - 1) / apiBatchSize
         let logInterval = max(1, totalBatches / 5)
 
-        for (batchIdx, batchStart) in stride(from: 0, to: coarsePoints.count, by: apiBatchSize).enumerated() {
-            let batchEnd = min(batchStart + apiBatchSize, coarsePoints.count)
-            let batchCoords = Array(coords[batchStart..<batchEnd])
+        for (batchIdx, batchStart) in stride(from: 0, to: apiMissIndices.count, by: apiBatchSize).enumerated() {
+            let batchEnd = min(batchStart + apiBatchSize, apiMissIndices.count)
+            let batchMissIndices = Array(apiMissIndices[batchStart..<batchEnd])
+            let batchCoords = batchMissIndices.map { (latitude: coarsePoints[$0].lat, longitude: coarsePoints[$0].lon) }
             do {
                 let results = try await openMeteoClient.fetchForecastDailyBatch(
                     coordinates: batchCoords,
                     forecastDays: forecastDaysToFetch
                 )
                 for (offset, obs) in results.enumerated() {
-                    forecastByCoord[batchStart + offset] = obs
+                    let coordIdx = batchMissIndices[offset]
+                    forecastByCoord[coordIdx] = obs
+                    // Store in Redis for next run (23h TTL — refreshes daily)
+                    if let cache = forecastCache, !obs.isEmpty {
+                        let coord = coarsePoints[coordIdx]
+                        let key = "forecast_obs:\(coord.lat):\(coord.lon):\(baseDate)"
+                        try? await cache.set(key: key, observations: obs, ttl: 23 * 3600)
+                    }
                 }
-                fetchedCount += batchCoords.count
             } catch {
                 logger.warning("Forecast batch fetch failed — using empty weather for batch", metadata: [
                     "batchStart": "\(batchStart)",
@@ -547,7 +577,7 @@ actor PipelineRunner {
                 ])
             }
 
-            if (batchIdx + 1) % logInterval == 0 || batchIdx + 1 == totalBatches {
+            if totalBatches > 0 && ((batchIdx + 1) % logInterval == 0 || batchIdx + 1 == totalBatches) {
                 let pct = Int(Double(batchIdx + 1) / Double(totalBatches) * 100)
                 logger.info("Forecast — weather fetch progress", metadata: [
                     "progress": "\(pct)%",
@@ -557,7 +587,9 @@ actor PipelineRunner {
         }
 
         logger.info("Forecast — Open-Meteo fetch complete", metadata: [
-            "fetched": "\(forecastByCoord.filter { !$0.isEmpty }.count)/\(coarsePoints.count)"
+            "fetched": "\(forecastByCoord.filter { !$0.isEmpty }.count)/\(coarsePoints.count)",
+            "fromCache": "\(cacheHits)",
+            "fromAPI": "\(apiMissIndices.count)"
         ])
 
         // Remove stale forecast directories (dates ≤ baseDate that are no longer future forecasts)

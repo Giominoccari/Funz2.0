@@ -131,12 +131,14 @@ final class DailyScheduler: LifecycleHandler, @unchecked Sendable {
                 geoEnrichmentClient: geoClient,
                 tileUploader: LocalTileUploader()
             )
+            let forecastCache = RedisForecastObsCache(redis: app.redis)
             try await runner.runForecast(
                 bbox: .italy,
                 baseDate: date,
                 days: 5,
                 openMeteoClient: openMeteo,
-                db: sqlDb
+                db: sqlDb,
+                forecastCache: forecastCache
             )
         }
 

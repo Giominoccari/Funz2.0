@@ -7,6 +7,31 @@ protocol WeatherCache: Sendable {
     func set(key: String, value: WeatherData, ttl: Int) async throws
 }
 
+/// Cache for raw forecast observations per coordinate.
+/// Stores [DailyObservation] (not aggregated) so the forecast pipeline
+/// can reconstruct per-day weather without losing per-day variation.
+protocol ForecastObsCache: Sendable {
+    func get(key: String) async throws -> [DailyObservation]?
+    func set(key: String, observations: [DailyObservation], ttl: Int) async throws
+}
+
+// @unchecked Sendable: same rationale as RedisWeatherCache below.
+struct RedisForecastObsCache: ForecastObsCache, @unchecked Sendable {
+    let redis: any RedisClient
+
+    func get(key: String) async throws -> [DailyObservation]? {
+        let value = try await redis.get(RedisKey(key), as: String.self).get()
+        guard let json = value else { return nil }
+        return try JSONDecoder().decode([DailyObservation].self, from: Data(json.utf8))
+    }
+
+    func set(key: String, observations: [DailyObservation], ttl: Int) async throws {
+        let json = String(data: try JSONEncoder().encode(observations), encoding: .utf8)!
+        _ = try await redis.set(RedisKey(key), to: json).get()
+        _ = try await redis.expire(RedisKey(key), after: .seconds(Int64(ttl))).get()
+    }
+}
+
 // @unchecked Sendable: RedisClient is pool-backed and thread-safe but RediStack doesn't declare Sendable conformance
 struct RedisWeatherCache: WeatherCache, @unchecked Sendable {
     let redis: any RedisClient

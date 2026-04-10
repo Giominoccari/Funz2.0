@@ -81,12 +81,14 @@ struct WorkerCommand: AsyncCommand {
                 tileUploader: LocalTileUploader()
             )
 
+            let forecastCache = RedisForecastObsCache(redis: app.redis)
             try await runner.runForecast(
                 bbox: bbox,
                 baseDate: date,
                 days: forecastDays,
                 openMeteoClient: openMeteoClient,
-                db: sqlDb
+                db: sqlDb,
+                forecastCache: forecastCache
             )
         } else {
             let redis = RedisWeatherCache(redis: app.redis)
