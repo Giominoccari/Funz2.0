@@ -78,4 +78,4 @@ secrets/
 *-service-key.json
 *_service_key.json
 *.o
-*.d
+*.dStorage/logs
