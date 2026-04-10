@@ -171,30 +171,18 @@
         // score>0  → dynamic tiles computed from raster with threshold filter
         // No token → dev-tiles (local only, unauthenticated)
         //
-        // v= cache-buster: set once per overlay load so WKWebView/MapLibre never
-        // serves stale cached tiles after a pipeline re-run or overlay reload.
-        let tileCacheVersion = Date.now();
-
         function tileURLTemplate(date, score) {
             const s = (typeof score === 'number') ? score : 0;
-            if (!authToken) return `/map/dev-tiles/${date}/{z}/{x}/{y}?v=${tileCacheVersion}`;
+            if (!authToken) return `/map/dev-tiles/${date}/{z}/{x}/{y}`;
             if (s > 0) {
-                return `/map/dynamic-tiles/${date}/{z}/{x}/{y}?min_score=${s.toFixed(2)}&token=${encodeURIComponent(authToken)}&v=${tileCacheVersion}`;
+                return `/map/dynamic-tiles/${date}/{z}/{x}/{y}?min_score=${s.toFixed(2)}&token=${encodeURIComponent(authToken)}`;
             }
-            return `/map/tiles/${date}/{z}/{x}/{y}?token=${encodeURIComponent(authToken)}&v=${tileCacheVersion}`;
+            return `/map/tiles/${date}/{z}/{x}/{y}?token=${encodeURIComponent(authToken)}`;
         }
 
         // ── Map initialization ──
         const map = new maplibregl.Map({
             container: 'map',
-            // Force JPEG for ESRI satellite tiles — WKWebView sends Accept: image/webp
-            // which causes ESRI to return WEBP tiles. iOS's WEBP decoder fails on certain
-            // tile variants (err=-50), causing repeated decode errors and WebContent crashes.
-            transformRequest: (url, resourceType) => {
-                if (resourceType === 'Tile' && url.includes('arcgisonline.com')) {
-                    return { url, headers: { 'Accept': 'image/jpeg,image/png,image/*;q=0.8,*/*;q=0.5' } };
-                }
-            },
             style: {
                 version: 8,
                 sources: {
@@ -567,10 +555,26 @@
             }
         };
 
-        // Called by native after token refresh — updates token and reloads tiles with correct date
+        // Returns true if a JWT access token's exp claim is in the past.
+        function isTokenExpired(token) {
+            try {
+                const exp = JSON.parse(atob(token.split('.')[1])).exp;
+                return exp && exp < Date.now() / 1000;
+            } catch { return false; }
+        }
+
+        // Called by native after token refresh — updates token and reloads tiles with correct date.
+        // Guards against calling addSource/addLayer before the map fires 'load'.
         window.setMapAuth = function(token, date) {
             if (token) authToken = token;
-            if (date) loadOverlay(date);
+            if (date) {
+                if (map.loaded()) {
+                    loadOverlay(date);
+                } else {
+                    // Map hasn't fired 'load' yet — store the date so map.on('load') picks it up.
+                    currentDate = date;
+                }
+            }
         };
 
         // Token-only update: refresh the auth token without reloading tiles.
@@ -584,9 +588,9 @@
 
         function forecastTileURLTemplate(date) {
             if (authToken) {
-                return `/map/forecast-tiles/${date}/{z}/{x}/{y}?token=${encodeURIComponent(authToken)}&v=${tileCacheVersion}`;
+                return `/map/forecast-tiles/${date}/{z}/{x}/{y}?token=${encodeURIComponent(authToken)}`;
             }
-            return `/map/forecast-tiles/${date}/{z}/{x}/{y}?v=${tileCacheVersion}`;
+            return `/map/forecast-tiles/${date}/{z}/{x}/{y}`;
         }
 
         window.loadForecastOverlay = function(date) {
@@ -629,7 +633,13 @@
 
         // ── Init ──
         map.on('load', () => {
-            loadOverlay(currentDate);
+            // Skip loadOverlay if the embedded token is already expired.
+            // setMapAuth() will be called shortly with a fresh token and will
+            // trigger loadOverlay itself. Prevents the 401 flood that puts
+            // MapLibre in a broken state before the refresh cycle completes.
+            if (!authToken || !isTokenExpired(authToken)) {
+                loadOverlay(currentDate);
+            }
             nativeLog('Funghi Map loaded date=' + currentDate);
         });
     </script>
