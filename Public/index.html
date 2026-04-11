@@ -641,7 +641,16 @@
 
         // ── Init ──
         map.on('load', () => {
-            loadOverlay(currentDate);
+            // Notify native that MapLibre is ready. Native will call setMapAuth()
+            // with a guaranteed-fresh token, which then calls loadOverlay().
+            // This avoids the race where loadOverlay fires with an expired URL token
+            // before the native .task{} token refresh has completed.
+            if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.mapReady) {
+                window.webkit.messageHandlers.mapReady.postMessage(null);
+            } else {
+                // Fallback for dev/simulator where native handler may not be registered.
+                loadOverlay(currentDate);
+            }
             nativeLog('Funghi Map loaded date=' + currentDate);
         });
     </script>
