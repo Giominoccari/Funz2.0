@@ -633,13 +633,7 @@
 
         // ── Init ──
         map.on('load', () => {
-            // Skip loadOverlay if the embedded token is already expired.
-            // setMapAuth() will be called shortly with a fresh token and will
-            // trigger loadOverlay itself. Prevents the 401 flood that puts
-            // MapLibre in a broken state before the refresh cycle completes.
-            if (!authToken || !isTokenExpired(authToken)) {
-                loadOverlay(currentDate);
-            }
+            loadOverlay(currentDate);
             nativeLog('Funghi Map loaded date=' + currentDate);
         });
     </script>
