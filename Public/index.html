@@ -629,14 +629,13 @@
             nativeLog('map.error src=' + src + ' msg=' + msg);
 
             // "Load failed" means WebContent networking proxy is broken (iOS 26 didBecomeUnresponsive).
-            // On second load GPU shaders are cached → no unresponsiveness → proxy survives.
-            // sessionStorage flag prevents infinite reload loop.
-            if (msg === 'Load failed' && !sessionStorage.getItem('_reloaded')) {
+            // window.location.reload() reuses the same broken process — we need Swift to
+            // destroy+recreate the WKWebView entirely (new process, fresh networking stack).
+            if (msg === 'Load failed') {
                 _tileLoadFailCount++;
-                if (_tileLoadFailCount >= 3) {
-                    nativeLog('networking broken — reloading for GPU cache warm-up');
-                    sessionStorage.setItem('_reloaded', '1');
-                    window.location.reload();
+                if (_tileLoadFailCount === 3) {
+                    nativeLog('networking broken — requesting new WebContent process');
+                    try { webkit.messageHandlers.networkingBroken.postMessage(null); } catch(e) {}
                 }
             }
         });
