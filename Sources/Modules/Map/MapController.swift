@@ -38,12 +38,14 @@ struct MapController: RouteCollection, Sendable {
         Self.logger.info("getTiles")
         // Validate zoom range (absolute bounds)
         guard (6...12).contains(z) else {
+            Self.logger.info("Zoom must be between 6 and 12")
             throw Abort(.badRequest, reason: "Zoom must be between 6 and 12")
         }
 
         // Enforce subscription tier zoom limit
         let maxZoom = req.planEntitlements.maxZoom
         guard z <= maxZoom else {
+        Self.logger.info("Zoom level \(z) requires a higher subscription tier (your max: \(maxZoom)).")
             throw Abort(.forbidden, reason: "Zoom level \(z) requires a higher subscription tier (your max: \(maxZoom)).")
         }
 
