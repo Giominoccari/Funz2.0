@@ -176,7 +176,7 @@
             if (s > 0) {
                 return `/map/dynamic-tiles/${date}/{z}/{x}/{y}?min_score=${s.toFixed(2)}&token=${encodeURIComponent(authToken)}`;
             }
-            return `/map/tiles/${date}/{z}/{x}/{y}`;
+            return `/map/tiles/${date}/{z}/{x}/{y}?token=${encodeURIComponent(authToken)}`;
         }
 
         // ── Map initialization ──
