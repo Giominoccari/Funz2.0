@@ -621,11 +621,24 @@
             nativeLog('map.load date=' + currentDate + ' hasToken=' + !!authToken);
         });
 
+        let _tileLoadFailCount = 0;
         map.on('error', (e) => {
             const err = e.error;
             const msg = err ? (err.message || err.status || String(err)) : 'unknown';
             const src = e.sourceId || (e.tile ? String(e.tile.tileID) : '');
             nativeLog('map.error src=' + src + ' msg=' + msg);
+
+            // "Load failed" means WebContent networking proxy is broken (iOS 26 didBecomeUnresponsive).
+            // On second load GPU shaders are cached → no unresponsiveness → proxy survives.
+            // sessionStorage flag prevents infinite reload loop.
+            if (msg === 'Load failed' && !sessionStorage.getItem('_reloaded')) {
+                _tileLoadFailCount++;
+                if (_tileLoadFailCount >= 3) {
+                    nativeLog('networking broken — reloading for GPU cache warm-up');
+                    sessionStorage.setItem('_reloaded', '1');
+                    window.location.reload();
+                }
+            }
         });
 
         // Patch setMapAuth to also log
