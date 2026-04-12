@@ -188,7 +188,7 @@
                 sources: {
                     'esri-satellite': {
                         type: 'raster',
-                        tiles: ['esritile://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
+                        tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
                         tileSize: 256,
                         maxzoom: 18,
                         attribution: '&copy; Esri, Maxar, Earthstar Geographics'
@@ -566,19 +566,10 @@
         }
 
         // Called by native after token refresh — updates token and reloads tiles with correct date.
-        // Guards against calling addSource/addLayer before the map fires 'load'.
         window.setMapAuth = function(token, date) {
-            const wasLoaded = map.loaded();
             if (token) authToken = token;
-            nativeLog('setMapAuth date=' + date + ' mapLoaded=' + wasLoaded + ' hasToken=' + !!token);
-            if (date) {
-                if (wasLoaded) {
-                    loadOverlay(date);
-                } else {
-                    // Map hasn't fired 'load' yet — store the date so map.on('load') picks it up.
-                    currentDate = date;
-                }
-            }
+            nativeLog('setMapAuth date=' + date + ' mapLoaded=' + map.loaded() + ' hasToken=' + !!token);
+            if (date) loadOverlay(date);
         };
 
         // Token-only update: refresh the auth token without reloading tiles.
