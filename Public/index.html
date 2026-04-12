@@ -183,20 +183,15 @@
         // ── Map initialization ──
         const map = new maplibregl.Map({
             container: 'map',
-            // Force JPEG for ESRI satellite tiles — WKWebView sends Accept: image/webp
-            // which causes ESRI to return WEBP tiles. iOS's WEBP decoder fails on certain
-            // tile variants (err=-50), causing repeated decode errors and WebContent crashes.
-            transformRequest: (url, resourceType) => {
-                if (resourceType === 'Tile' && url.includes('arcgisonline.com')) {
-                    return { url, headers: { 'Accept': 'image/jpeg,image/png,image/*;q=0.8,*/*;q=0.5' } };
-                }
-            },
             style: {
                 version: 8,
                 sources: {
                     'esri-satellite': {
                         type: 'raster',
-                        tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
+                        // esritile:// routes through ESRITileSchemeHandler (native URLSession)
+                        // which sets Accept: image/jpeg — prevents ESRI from returning WEBP tiles
+                        // that fail to decode on iOS (err=-50, makeImagePlus crash → didBecomeUnresponsive)
+                        tiles: ['esritile://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
                         tileSize: 256,
                         maxzoom: 18,
                         attribution: '&copy; Esri, Maxar, Earthstar Geographics'
