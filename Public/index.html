@@ -616,8 +616,22 @@
         // ── Init ──
         map.on('load', () => {
             loadOverlay(currentDate);
-            nativeLog('map.on(load) fired date=' + currentDate + ' hasToken=' + !!authToken);
+            nativeLog('map.load date=' + currentDate + ' hasToken=' + !!authToken);
         });
+
+        map.on('error', (e) => {
+            const err = e.error;
+            const msg = err ? (err.message || err.status || String(err)) : 'unknown';
+            const src = e.sourceId || (e.tile ? String(e.tile.tileID) : '');
+            nativeLog('map.error src=' + src + ' msg=' + msg);
+        });
+
+        // Patch setMapAuth to also log
+        const _origSetMapAuth = window.setMapAuth;
+        window.setMapAuth = function(token, date) {
+            nativeLog('setMapAuth called date=' + date + ' hasToken=' + !!token + ' mapLoaded=' + map.loaded());
+            _origSetMapAuth(token, date);
+        };
     </script>
 </body>
 </html>
