@@ -543,18 +543,15 @@
             }
         });
 
-        // ── Forward console.log to native jsLogger handler (for debugging) ──
-        (function() {
-            const origLog = console.log;
-            console.log = function() {
-                origLog.apply(console, arguments);
-                if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.jsLogger) {
-                    window.webkit.messageHandlers.jsLogger.postMessage(
-                        Array.from(arguments).map(String).join(' ')
-                    );
-                }
-            };
-        })();
+        // Selective debug logging — do NOT intercept console.log globally.
+        // MapLibre logs heavily during tile loading; each postMessage is a synchronous
+        // IPC call to the UI process. Forwarding all logs floods the IPC channel and
+        // causes WebContent to become unresponsive on iOS 26.
+        window.nativeLog = function(msg) {
+            if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.jsLogger) {
+                window.webkit.messageHandlers.jsLogger.postMessage(String(msg));
+            }
+        };
 
         // Called by native after token refresh — updates token and reloads tiles with correct date
         window.setMapAuth = function(token, date) {
@@ -619,7 +616,7 @@
         // ── Init ──
         map.on('load', () => {
             loadOverlay(currentDate);
-            console.log('Funghi Map loaded', { date: currentDate, lat: initLat, lon: initLon });
+            nativeLog('map.on(load) fired date=' + currentDate + ' hasToken=' + !!authToken);
         });
     </script>
 </body>
