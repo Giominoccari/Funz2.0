@@ -642,10 +642,10 @@
         });
 
         map.on('error', (e) => {
-            nativeLog('map.error: ' + JSON.stringify(e.error || e));
-        });
-        map.on('sourceerror', (e) => {
-            nativeLog('sourceerror source=' + e.sourceId + ' ' + JSON.stringify(e.error || ''));
+            const err = e.error;
+            const msg = err ? (err.message || err.status || String(err)) : 'unknown';
+            const src = e.sourceId || e.tile?.tileID || '';
+            nativeLog('map.error src=' + src + ' msg=' + msg);
         });
     </script>
 </body>
