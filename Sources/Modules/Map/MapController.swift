@@ -55,6 +55,8 @@ struct MapController: RouteCollection, Sendable {
                 "path": "\(date)/\(z)/\(x)/\(y).png"
             ])
             let response = try await req.fileio.asyncStreamFile(at: localPath)
+
+            response.headers.replaceOrAdd(name: .contentType, value: "image/png");
             response.headers.replaceOrAdd(name: .cacheControl, value: "public, max-age=86400")
             return response
         }
