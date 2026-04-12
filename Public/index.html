@@ -249,10 +249,12 @@
             // If called without explicit score (e.g. from native bridge on date switch),
             // preserve the current JS threshold so the filter is not silently dropped.
             const score = (minScore !== undefined) ? minScore : (heatShowAll ? 0 : heatThreshold / 100);
+            const tileURL = tileURLTemplate(date, score);
+            nativeLog('loadOverlay date=' + date + ' hasToken=' + !!authToken + ' url=' + tileURL.slice(0, 80));
 
             map.addSource(sourceId, {
                 type: 'raster',
-                tiles: [tileURLTemplate(date, score)],
+                tiles: [tileURL],
                 tileSize: 256,
                 minzoom: 6,
                 maxzoom: 12
@@ -574,9 +576,11 @@
         // Called by native after token refresh — updates token and reloads tiles with correct date.
         // Guards against calling addSource/addLayer before the map fires 'load'.
         window.setMapAuth = function(token, date) {
+            const wasLoaded = map.loaded();
             if (token) authToken = token;
+            nativeLog('setMapAuth date=' + date + ' mapLoaded=' + wasLoaded + ' hasToken=' + !!token);
             if (date) {
-                if (map.loaded()) {
+                if (wasLoaded) {
                     loadOverlay(date);
                 } else {
                     // Map hasn't fired 'load' yet — store the date so map.on('load') picks it up.
@@ -641,17 +645,8 @@
 
         // ── Init ──
         map.on('load', () => {
-            // Notify native that MapLibre is ready. Native will call setMapAuth()
-            // with a guaranteed-fresh token, which then calls loadOverlay().
-            // This avoids the race where loadOverlay fires with an expired URL token
-            // before the native .task{} token refresh has completed.
-            if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.mapReady) {
-                window.webkit.messageHandlers.mapReady.postMessage(null);
-            } else {
-                // Fallback for dev/simulator where native handler may not be registered.
-                loadOverlay(currentDate);
-            }
-            nativeLog('Funghi Map loaded date=' + currentDate);
+            nativeLog('map.on(load) fired date=' + currentDate + ' hasToken=' + !!authToken + ' tokenExpired=' + isTokenExpired(authToken));
+            loadOverlay(currentDate);
         });
     </script>
 </body>
