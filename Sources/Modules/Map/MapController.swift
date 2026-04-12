@@ -27,7 +27,10 @@ struct MapController: RouteCollection, Sendable {
     // MARK: - GET /map/tiles/:date/:z/:x/:y
 
     @Sendable
-    func getTile(req: Request) async throws -> Response {
+     func getTile(req: Request) async throws -> Response {
+        guard req.application.environment != .production else {
+            throw Abort(.notFound)
+        }
         guard let date = req.parameters.get("date"),
               let zStr = req.parameters.get("z"), let z = Int(zStr),
               let xStr = req.parameters.get("x"), let x = Int(xStr),
@@ -35,44 +38,62 @@ struct MapController: RouteCollection, Sendable {
         else {
             throw Abort(.badRequest, reason: "Invalid tile parameters")
         }
-        Self.logger.info("getTiles")
-        // Validate zoom range (absolute bounds)
         guard (6...12).contains(z) else {
-            Self.logger.info("Zoom must be between 6 and 12")
             throw Abort(.badRequest, reason: "Zoom must be between 6 and 12")
         }
-
-        // Enforce subscription tier zoom limit
-        let maxZoom = req.planEntitlements.maxZoom
-        guard z <= maxZoom else {
-        Self.logger.info("Zoom level \(z) requires a higher subscription tier (your max: \(maxZoom)).")
-            throw Abort(.forbidden, reason: "Zoom level \(z) requires a higher subscription tier (your max: \(maxZoom)).")
-        }
-
-        // 1. Try local directory first
         let localPath = req.application.directory.workingDirectory + "Storage/tiles/\(date)/\(z)/\(x)/\(y).png"
-        
         guard FileManager.default.fileExists(atPath: localPath) else {
             throw Abort(.notFound)
         }
         return try await req.fileio.asyncStreamFile(at: localPath)
-
-        // // 2. Fallback to S3 presigned URL redirect
-        // if let s3Config = self.loadS3Config(req: req) {
-        //     let key = "\(date)/\(z)/\(x)/\(y).png"
-        //     let signedURL = try await self.presignedS3URL(
-        //         bucket: s3Config.bucket,
-        //         key: key,
-        //         region: s3Config.region,
-        //         req: req
-        //     )
-        //     Self.logger.info("Redirecting to S3", metadata: ["key": "\(key)"])
-        //     return req.redirect(to: signedURL, redirectType: .temporary)
-        // }
-
-        // // 3. Neither local nor S3 available
-        // throw Abort(.notFound, reason: "Tile not found")
     }
+
+    //     guard let date = req.parameters.get("date"),
+    //           let zStr = req.parameters.get("z"), let z = Int(zStr),
+    //           let xStr = req.parameters.get("x"), let x = Int(xStr),
+    //           let yStr = req.parameters.get("y"), let y = Int(yStr)
+    //     else {
+    //         throw Abort(.badRequest, reason: "Invalid tile parameters")
+    //     }
+    //     Self.logger.info("getTiles")
+    //     // Validate zoom range (absolute bounds)
+    //     guard (6...12).contains(z) else {
+    //         Self.logger.info("Zoom must be between 6 and 12")
+    //         throw Abort(.badRequest, reason: "Zoom must be between 6 and 12")
+    //     }
+
+    //     // Enforce subscription tier zoom limit
+    //     let maxZoom = req.planEntitlements.maxZoom
+    //     guard z <= maxZoom else {
+    //         Self.logger.info("Zoom level \(z) requires a higher subscription tier (your max: \(maxZoom)).")
+    //         throw Abort(.forbidden, reason: "Zoom level \(z) requires a higher subscription tier (your max: \(maxZoom)).")
+    //     }
+
+    //     // 1. Try local directory first
+    //     let localPath = req.application.directory.workingDirectory + "Storage/tiles/\(date)/\(z)/\(x)/\(y).png"
+        
+    //     guard FileManager.default.fileExists(atPath: localPath) else {
+    //         Self.logger.info("not fpund")
+    //         throw Abort(.notFound)
+    //     }
+    //     return try await req.fileio.asyncStreamFile(at: localPath)
+
+    //     // // 2. Fallback to S3 presigned URL redirect
+    //     // if let s3Config = self.loadS3Config(req: req) {
+    //     //     let key = "\(date)/\(z)/\(x)/\(y).png"
+    //     //     let signedURL = try await self.presignedS3URL(
+    //     //         bucket: s3Config.bucket,
+    //     //         key: key,
+    //     //         region: s3Config.region,
+    //     //         req: req
+    //     //     )
+    //     //     Self.logger.info("Redirecting to S3", metadata: ["key": "\(key)"])
+    //     //     return req.redirect(to: signedURL, redirectType: .temporary)
+    //     // }
+
+    //     // // 3. Neither local nor S3 available
+    //     // throw Abort(.notFound, reason: "Tile not found")
+    // }
 
     // MARK: - GET /map/dev-tiles/:date/:z/:x/:y (unauthenticated, local only)
 
