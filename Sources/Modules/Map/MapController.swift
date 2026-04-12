@@ -11,8 +11,8 @@ struct MapController: RouteCollection, Sendable {
         let map = routes.grouped("map")
         let protectedMap = map.grouped(JWTAuthMiddleware(), SubscriptionMiddleware())
         // Historical tiles
-        protectedMap.get("tiles", ":date", ":z", ":x", ":y", use: getTile)
-        protectedMap.get("dynamic-tiles", ":date", ":z", ":x", ":y", use: getDynamicTile)
+        map.get("tiles", ":date", ":z", ":x", ":y", use: getTile)
+        map.get("dynamic-tiles", ":date", ":z", ":x", ":y", use: getDynamicTile)
         // Forecast tiles (served from Storage/tiles/forecast/{date}/)
         protectedMap.get("forecast-tiles", ":date", ":z", ":x", ":y", use: getForecastTile)
         // Dev-only: unauthenticated tile access (local files only, no S3)
