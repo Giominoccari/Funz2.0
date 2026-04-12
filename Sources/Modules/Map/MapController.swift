@@ -35,7 +35,7 @@ struct MapController: RouteCollection, Sendable {
         else {
             throw Abort(.badRequest, reason: "Invalid tile parameters")
         }
-
+        Self.logger.info("getTiles")
         // Validate zoom range (absolute bounds)
         guard (6...12).contains(z) else {
             throw Abort(.badRequest, reason: "Zoom must be between 6 and 12")
@@ -49,9 +49,9 @@ struct MapController: RouteCollection, Sendable {
 
         // 1. Try local directory first
         let localPath = req.application.directory.workingDirectory + "Storage/tiles/\(date)/\(z)/\(x)/\(y).png"
-
+        
         if FileManager.default.fileExists(atPath: localPath) {
-            Self.logger.trace("Serving tile from local storage", metadata: [
+            Self.logger.info("Serving tile from local storage", metadata: [
                 "path": "\(date)/\(z)/\(x)/\(y).png"
             ])
             let response = try await req.fileio.asyncStreamFile(at: localPath)
@@ -68,7 +68,7 @@ struct MapController: RouteCollection, Sendable {
                 region: s3Config.region,
                 req: req
             )
-            Self.logger.trace("Redirecting to S3", metadata: ["key": "\(key)"])
+            Self.logger.info("Redirecting to S3", metadata: ["key": "\(key)"])
             return req.redirect(to: signedURL, redirectType: .temporary)
         }
 
