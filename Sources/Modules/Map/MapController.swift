@@ -54,11 +54,7 @@ struct MapController: RouteCollection, Sendable {
             Self.logger.info("Serving tile from local storage", metadata: [
                 "path": "\(date)/\(z)/\(x)/\(y).png"
             ])
-            let response = try await req.fileio.asyncStreamFile(at: localPath)
-
-            response.headers.replaceOrAdd(name: .contentType, value: "image/png");
-            response.headers.replaceOrAdd(name: .cacheControl, value: "public, max-age=86400")
-            return response
+            return try await req.fileio.asyncStreamFile(at: localPath)
         }
 
         // 2. Fallback to S3 presigned URL redirect
@@ -173,8 +169,6 @@ struct MapController: RouteCollection, Sendable {
         try image.compress(stream: &pngData, level: 1)
 
         var headers = HTTPHeaders()
-        headers.add(name: .contentType, value: "image/png")
-        headers.add(name: .cacheControl, value: "public, max-age=3600")
         return Response(status: .ok, headers: headers, body: .init(data: Data(pngData)))
     }
 
