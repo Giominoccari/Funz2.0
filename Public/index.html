@@ -237,6 +237,8 @@
             currentMode = 'historical';
             currentForecastDate = null;
 
+            nativeLog('loadOverlay date=' + date + ' score=' + minScore + ' hasToken=' + !!authToken);
+
             // If called without explicit score (e.g. from native bridge on date switch),
             // preserve the current JS threshold so the filter is not silently dropped.
             const score = (minScore !== undefined) ? minScore : (heatShowAll ? 0 : heatThreshold / 100);
