@@ -188,10 +188,7 @@
                 sources: {
                     'esri-satellite': {
                         type: 'raster',
-                        // esritile:// routes through ESRITileSchemeHandler (native URLSession)
-                        // which sets Accept: image/jpeg — prevents ESRI from returning WEBP tiles
-                        // that fail to decode on iOS (err=-50, makeImagePlus crash → didBecomeUnresponsive)
-                        tiles: ['esritile://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
+                        tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
                         tileSize: 256,
                         maxzoom: 18,
                         attribution: '&copy; Esri, Maxar, Earthstar Geographics'
@@ -642,6 +639,13 @@
         map.on('load', () => {
             nativeLog('map.on(load) fired date=' + currentDate + ' hasToken=' + !!authToken + ' tokenExpired=' + isTokenExpired(authToken));
             loadOverlay(currentDate);
+        });
+
+        map.on('error', (e) => {
+            nativeLog('map.error: ' + JSON.stringify(e.error || e));
+        });
+        map.on('sourceerror', (e) => {
+            nativeLog('sourceerror source=' + e.sourceId + ' ' + JSON.stringify(e.error || ''));
         });
     </script>
 </body>
