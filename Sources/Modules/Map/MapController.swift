@@ -50,28 +50,26 @@ struct MapController: RouteCollection, Sendable {
         // 1. Try local directory first
         let localPath = req.application.directory.workingDirectory + "Storage/tiles/\(date)/\(z)/\(x)/\(y).png"
         
-        if FileManager.default.fileExists(atPath: localPath) {
-            Self.logger.info("Serving tile from local storage", metadata: [
-                "path": "\(date)/\(z)/\(x)/\(y).png"
-            ])
-            return try await req.fileio.asyncStreamFile(at: localPath)
+        guard FileManager.default.fileExists(atPath: localPath) else {
+            throw Abort(.notFound)
         }
+        return try await req.fileio.asyncStreamFile(at: localPath)
 
-        // 2. Fallback to S3 presigned URL redirect
-        if let s3Config = self.loadS3Config(req: req) {
-            let key = "\(date)/\(z)/\(x)/\(y).png"
-            let signedURL = try await self.presignedS3URL(
-                bucket: s3Config.bucket,
-                key: key,
-                region: s3Config.region,
-                req: req
-            )
-            Self.logger.info("Redirecting to S3", metadata: ["key": "\(key)"])
-            return req.redirect(to: signedURL, redirectType: .temporary)
-        }
+        // // 2. Fallback to S3 presigned URL redirect
+        // if let s3Config = self.loadS3Config(req: req) {
+        //     let key = "\(date)/\(z)/\(x)/\(y).png"
+        //     let signedURL = try await self.presignedS3URL(
+        //         bucket: s3Config.bucket,
+        //         key: key,
+        //         region: s3Config.region,
+        //         req: req
+        //     )
+        //     Self.logger.info("Redirecting to S3", metadata: ["key": "\(key)"])
+        //     return req.redirect(to: signedURL, redirectType: .temporary)
+        // }
 
-        // 3. Neither local nor S3 available
-        throw Abort(.notFound, reason: "Tile not found")
+        // // 3. Neither local nor S3 available
+        // throw Abort(.notFound, reason: "Tile not found")
     }
 
     // MARK: - GET /map/dev-tiles/:date/:z/:x/:y (unauthenticated, local only)
