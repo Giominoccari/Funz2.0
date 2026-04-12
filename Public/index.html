@@ -187,10 +187,7 @@
                 sources: {
                     'esri-satellite': {
                         type: 'raster',
-                        // esritile:// is intercepted by ESRITileSchemeHandler in Swift, which forces
-                        // Accept: image/jpeg — prevents ESRI from returning WEBP tiles that break
-                        // WebContent networking on iOS 26 (makeImagePlus err=-50).
-                        tiles: ['esritile://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
+                        tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
                         tileSize: 256,
                         maxzoom: 18,
                         attribution: '&copy; Esri, Maxar, Earthstar Geographics'
