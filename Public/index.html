@@ -170,7 +170,6 @@
         // score=0  → static pre-rendered tiles (served from disk/nginx, ~instant)
         // score>0  → dynamic tiles computed from raster with threshold filter
         // No token → dev-tiles (local only, unauthenticated)
-        //
         function tileURLTemplate(date, score) {
             const s = (typeof score === 'number') ? score : 0;
             if (!authToken) return `/map/dev-tiles/${date}/{z}/{x}/{y}`;
@@ -188,7 +187,7 @@
                 sources: {
                     'esri-satellite': {
                         type: 'raster',
-                        tiles: ['esritile://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
+                        tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
                         tileSize: 256,
                         maxzoom: 18,
                         attribution: '&copy; Esri, Maxar, Earthstar Geographics'
@@ -241,12 +240,10 @@
             // If called without explicit score (e.g. from native bridge on date switch),
             // preserve the current JS threshold so the filter is not silently dropped.
             const score = (minScore !== undefined) ? minScore : (heatShowAll ? 0 : heatThreshold / 100);
-            const tileURL = tileURLTemplate(date, score);
-            nativeLog('loadOverlay date=' + date + ' hasToken=' + !!authToken + ' url=' + tileURL.slice(0, 80));
 
             map.addSource(sourceId, {
                 type: 'raster',
-                tiles: [tileURL],
+                tiles: [tileURLTemplate(date, score)],
                 tileSize: 256,
                 minzoom: 6,
                 maxzoom: 12
@@ -546,29 +543,22 @@
             }
         });
 
-        // ── Forward explicit app-level debug messages to native jsLogger ──
-        // NOTE: Do NOT intercept console.log globally — MapLibre logs heavily during
-        // tile loading and each postMessage is a synchronous IPC call to the UI process.
-        // Forwarding all logs causes hundreds of IPC round-trips that make the
-        // WebContent process unresponsive on iOS. Use nativeLog() for intentional debug.
-        window.nativeLog = function(msg) {
-            if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.jsLogger) {
-                window.webkit.messageHandlers.jsLogger.postMessage(String(msg));
-            }
-        };
+        // ── Forward console.log to native jsLogger handler (for debugging) ──
+        (function() {
+            const origLog = console.log;
+            console.log = function() {
+                origLog.apply(console, arguments);
+                if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.jsLogger) {
+                    window.webkit.messageHandlers.jsLogger.postMessage(
+                        Array.from(arguments).map(String).join(' ')
+                    );
+                }
+            };
+        })();
 
-        // Returns true if a JWT access token's exp claim is in the past.
-        function isTokenExpired(token) {
-            try {
-                const exp = JSON.parse(atob(token.split('.')[1])).exp;
-                return exp && exp < Date.now() / 1000;
-            } catch { return false; }
-        }
-
-        // Called by native after token refresh — updates token and reloads tiles with correct date.
+        // Called by native after token refresh — updates token and reloads tiles with correct date
         window.setMapAuth = function(token, date) {
             if (token) authToken = token;
-            nativeLog('setMapAuth date=' + date + ' mapLoaded=' + map.loaded() + ' hasToken=' + !!token);
             if (date) loadOverlay(date);
         };
 
@@ -628,15 +618,8 @@
 
         // ── Init ──
         map.on('load', () => {
-            nativeLog('map.on(load) fired date=' + currentDate + ' hasToken=' + !!authToken + ' tokenExpired=' + isTokenExpired(authToken));
             loadOverlay(currentDate);
-        });
-
-        map.on('error', (e) => {
-            const err = e.error;
-            const msg = err ? (err.message || err.status || String(err)) : 'unknown';
-            const src = e.sourceId || e.tile?.tileID || '';
-            nativeLog('map.error src=' + src + ' msg=' + msg);
+            console.log('Funghi Map loaded', { date: currentDate, lat: initLat, lon: initLon });
         });
     </script>
 </body>
