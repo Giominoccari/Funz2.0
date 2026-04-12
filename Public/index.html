@@ -172,11 +172,11 @@
         // No token → dev-tiles (local only, unauthenticated)
         function tileURLTemplate(date, score) {
             const s = (typeof score === 'number') ? score : 0;
-            //if (!authToken) return `/map/dev-tiles/${date}/{z}/{x}/{y}`;
+            if (!authToken) return `/map/dev-tiles/${date}/{z}/{x}/{y}`;
             if (s > 0) {
                 return `/map/dynamic-tiles/${date}/{z}/{x}/{y}?min_score=${s.toFixed(2)}&token=${encodeURIComponent(authToken)}`;
             }
-            return `/map/tiles/${date}/{z}/{x}/{y}?token=${encodeURIComponent(authToken)}`;
+            return `/map/tiles/${date}/{z}/{x}/{y}`;
         }
 
         // ── Map initialization ──
