@@ -212,9 +212,15 @@ actor WeatherRepository {
             ORDER BY observed_date
             """).all()
 
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        formatter.timeZone = TimeZone(secondsFromGMT: 0) // importante per evitare shift
+
         let daily = try rows.map { row in
-            DailyWeather(
-                date: try row.decode(column: "observed_date", as: String.self),
+            let dateObj = try row.decode(column: "observed_date", as: Date.self)
+
+            return DailyWeather(
+                date: formatter.string(from: dateObj),
                 rainMm: try row.decode(column: "rain_mm", as: Double.self),
                 tempMeanC: try row.decode(column: "temp_mean_c", as: Double.self),
                 humidityPct: try row.decode(column: "humidity_pct", as: Double.self)
