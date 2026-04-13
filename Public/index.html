@@ -350,8 +350,11 @@
 
         function setUserLocation(lat, lon) {
             if (!userMarker) {
-                userMarker = new maplibregl.Marker({ element: buildUserMarkerElement() })
-                    .setLngLat([lon, lat]).addTo(map);
+                userMarker = new maplibregl.Marker({
+                    element: buildUserMarkerElement(),
+                    rotationAlignment: 'viewport',
+                    pitchAlignment: 'viewport'
+                }).setLngLat([lon, lat]).addTo(map);
             } else {
                 userMarker.setLngLat([lon, lat]);
             }
