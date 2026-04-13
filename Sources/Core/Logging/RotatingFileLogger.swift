@@ -224,9 +224,10 @@ final class LogWriterPool: @unchecked Sendable {
 // MARK: - Bootstrap helper
 
 extension LoggingSystem {
-    /// Bootstraps swift-log with a `FunghiLogHandler` that writes to rotating files
-    /// under `logsDir` while echoing every record to stdout.
-    static func bootstrapFunghi(logsDir: URL, env: Environment) throws {
+    /// Bootstraps swift-log. Attempts to write rotating files under `logsDir`;
+    /// if the directory is inaccessible (bad mount, permission error, etc.) falls
+    /// back silently to stdout-only — the server never crashes due to logging setup.
+    static func bootstrapFunghi(logsDir: URL, env: Environment) {
         let level: Logger.Level
         if let raw = Environment.get("LOG_LEVEL"), let l = Logger.Level(rawValue: raw) {
             level = l
@@ -234,10 +235,22 @@ extension LoggingSystem {
             level = env.isRelease ? .info : .debug
         }
 
-        let pool = try LogWriterPool(logsDir: logsDir)
+        // try? — a bad mount point must not bring down the API server.
+        let pool = try? LogWriterPool(logsDir: logsDir)
 
         LoggingSystem.bootstrap { label in
-            FunghiLogHandler(label: label, writer: pool.writer(for: label), logLevel: level)
+            guard let pool else {
+                var handler = StreamLogHandler.standardOutput(label: label, metadataProvider: nil)
+                handler.logLevel = level
+                return handler
+            }
+            return FunghiLogHandler(label: label, writer: pool.writer(for: label), logLevel: level)
+        }
+
+        if pool == nil {
+            // Bootstrap is now live — we can use a Logger to report the fallback.
+            var logger = Logger(label: "funghi.boot")
+            logger.warning("File logging unavailable at \(logsDir.path) — stdout only")
         }
     }
 }
