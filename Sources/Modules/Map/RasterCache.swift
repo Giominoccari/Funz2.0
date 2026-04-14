@@ -35,4 +35,9 @@ actor RasterCache {
     func evict(date: String) {
         entries.removeValue(forKey: date)
     }
+
+    /// Evict all cached rasters (called at midnight before the daily pipeline).
+    func evictAll() {
+        entries.removeAll()
+    }
 }

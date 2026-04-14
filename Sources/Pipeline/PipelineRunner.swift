@@ -134,10 +134,13 @@ actor PipelineRunner {
         )
         let output = await tileGen.generateAll(results: results, bbox: bbox)
 
-        // Save the raster (already built during tile gen) for dynamic tile endpoint
+        // Save the raster (already built during tile gen) for dynamic tile endpoint.
+        // Evict the in-memory cache entry for this date so subsequent dynamic tile requests
+        // load from the freshly written file rather than a stale in-memory copy.
         let rasterPath = "Storage/tiles/\(date)/raster.bin"
         do {
             try output.raster.save(to: rasterPath)
+            await RasterCache.shared.evict(date: date)
             logger.info("Score raster saved", metadata: ["path": "\(rasterPath)"])
         } catch {
             logger.warning("Failed to save score raster", metadata: ["error": "\(error)"])

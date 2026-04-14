@@ -122,9 +122,15 @@ actor WeatherRepository {
 
     // MARK: - Store new daily observations
 
-    /// Batch-inserts daily observations. Uses ON CONFLICT DO NOTHING to skip duplicates.
+    /// Batch-inserts daily observations.
+    ///
+    /// - Parameter overwrite: when `true` uses `DO UPDATE SET` so that archive-quality
+    ///   data overwrites a forecast estimate stored for the same date. Use `true` for
+    ///   the historical pipeline (archive data is authoritative) and `false` for the
+    ///   forecast pipeline (forecast data must not clobber an existing archive row).
     func storeDailyObservations(
-        entries: [(lat: Double, lon: Double, observations: [DailyObservation])]
+        entries: [(lat: Double, lon: Double, observations: [DailyObservation])],
+        overwrite: Bool = false
     ) async throws {
         // Flatten into individual rows
         var allRows: [(lat: Double, lon: Double, date: String, rain: Double, temp: Double, hum: Double, soilTemp: Double)] = []
@@ -135,6 +141,10 @@ actor WeatherRepository {
         }
 
         guard !allRows.isEmpty else { return }
+
+        let conflictClause = overwrite
+            ? "DO UPDATE SET rain_mm = EXCLUDED.rain_mm, temp_mean_c = EXCLUDED.temp_mean_c, humidity_pct = EXCLUDED.humidity_pct, soil_temp_c = EXCLUDED.soil_temp_c"
+            : "DO NOTHING"
 
         let batchSize = 1000
         for batchStart in stride(from: 0, to: allRows.count, by: batchSize) {
@@ -148,13 +158,14 @@ actor WeatherRepository {
             try await db.raw("""
                 INSERT INTO weather_observations (latitude, longitude, observed_date, rain_mm, temp_mean_c, humidity_pct, soil_temp_c)
                 VALUES \(unsafeRaw: values)
-                ON CONFLICT (latitude, longitude, observed_date) DO NOTHING
+                ON CONFLICT (latitude, longitude, observed_date) \(unsafeRaw: conflictClause)
                 """).run()
         }
 
         logger.info("Stored daily weather observations", metadata: [
             "coordinates": "\(entries.count)",
-            "totalRows": "\(allRows.count)"
+            "totalRows": "\(allRows.count)",
+            "overwrite": "\(overwrite)"
         ])
     }
 

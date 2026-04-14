@@ -149,6 +149,11 @@ DUCK_CRON="*/15 * * * * $DUCKDNS_SCRIPT >> /tmp/duckdns.log 2>&1"
 (crontab -l 2>/dev/null | grep -v 'duckdns-update' ; echo "$DUCK_CRON") | crontab -
 echo "  ✔ DuckDNS update cron installed (every 15 minutes)"
 
+# ── 9. Setup nginx tile cache purge at midnight ──
+echo "▶ Setting up midnight nginx tile cache purge..."
+make -C "$PROJECT_ROOT" nginx-cache-cron-install
+echo "  ✔ Midnight nginx cache purge cron installed (00:00 daily)"
+
 # ── Done ──
 echo ""
 echo "═══════════════════════════════════════════════"

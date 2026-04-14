@@ -16,6 +16,7 @@ LOAD_ENV = if [ -f .env ]; then while IFS= read -r _line || [ -n "$$_line" ]; do
         docker-build deploy deploy-api deploy-worker cfn-deploy \
         clean clean-all \
         beta-setup beta-ssl-renew beta-nginx-restart \
+        nginx-cache-clear nginx-cache-cron-install \
         help
 
 # ═══════════════════════════════════════════════════════════════════
@@ -118,17 +119,21 @@ db-shell: ## Open psql shell to the database
 
 worker: ## Run historical map pipeline
 	docker exec funz-app /app/App worker --bbox italy
+	@$(MAKE) nginx-cache-clear
 
 worker-trentino: ## Run historical pipeline (Trentino only, faster)
 	docker exec funz-app /app/App worker --bbox trentino
+	@$(MAKE) nginx-cache-clear
 
 worker-full: worker worker-forecast ## Run historical + forecast pipeline (Italy)
 
 worker-forecast: ## Run forecast pipeline (generates tiles/forecast/YYYY-MM-DD/ for next 5 days)
 	docker exec funz-app /app/App worker --bbox italy --mode forecast
+	@$(MAKE) nginx-cache-clear
 
 worker-forecast-trentino: ## Run forecast pipeline (Trentino only, faster)
 	docker exec funz-app /app/App worker --bbox trentino --mode forecast
+	@$(MAKE) nginx-cache-clear
 
 worker-evaluate: ## Evaluate forecast scores at POIs and send push notifications
 	docker exec funz-app /app/App evaluate
@@ -225,6 +230,25 @@ beta-ssl-renew: ## Manually trigger certbot renewal
 
 beta-nginx-restart: ## Restart nginx
 	brew services restart nginx
+
+NGINX_CACHE_DIR ?= $(shell [ -d /opt/homebrew ] && echo /opt/homebrew || echo /usr/local)/var/cache/nginx/tile_cache
+
+nginx-cache-clear: ## Purge nginx tile cache (beta Mac only)
+	@echo "▶ Clearing nginx tile cache..."
+	@find "$(NGINX_CACHE_DIR)" -mindepth 1 -delete 2>/dev/null || true
+	@echo "✔ nginx tile cache cleared"
+
+# Installs a per-minute cron that watches for Storage/logs/.nginx-cache-pending.
+# The sentinel is written by:
+#   - DailyScheduler after the 02:45 automated pipeline run
+#   - make worker / worker-forecast / worker-full directly (no sentinel needed — clear is inline)
+# The cron fires within 60s of the pipeline finishing, then removes the sentinel.
+nginx-cache-cron-install: ## Install sentinel-watcher cron to purge nginx cache after pipeline runs (beta Mac only)
+	@PROJECT_ROOT="$$(pwd)"; \
+	SENTINEL="$$PROJECT_ROOT/Storage/logs/.nginx-cache-pending"; \
+	CRON_LINE="* * * * * [ -f \"$$SENTINEL\" ] && cd \"$$PROJECT_ROOT\" && make nginx-cache-clear && rm -f \"$$SENTINEL\" >> /tmp/nginx-cache-clear.log 2>&1"; \
+	( crontab -l 2>/dev/null | grep -v 'nginx-cache-clear' ; echo "$$CRON_LINE" ) | crontab -
+	@echo "✔ nginx cache sentinel watcher cron installed (fires within 60s of pipeline completion)"
 
 # ═══════════════════════════════════════════════════════════════════
 # Help

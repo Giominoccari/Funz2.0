@@ -141,8 +141,11 @@ struct CachedWeatherClient: WeatherClient {
                         startDate: missStart, endDate: missEnd
                     )
                     let newFiltered = newObs.filter { missingDates.contains($0.date) }
+                    // overwrite: true — archive data is authoritative and must replace any
+                    // forecast estimate that was stored for the same date by a previous run.
                     try? await repository?.storeDailyObservations(
-                        entries: [(lat: roundedLat, lon: roundedLon, observations: newFiltered)]
+                        entries: [(lat: roundedLat, lon: roundedLon, observations: newFiltered)],
+                        overwrite: true
                     )
                     let combined = (obs + newFiltered).sorted { $0.date < $1.date }
                     let aggregate = WeatherData.aggregate(from: combined)
@@ -156,8 +159,10 @@ struct CachedWeatherClient: WeatherClient {
         let daily = try await inner.fetchDaily(latitude: latitude, longitude: longitude)
         let aggregate = WeatherData.aggregate(from: daily)
         try? await cache.set(key: redisKey, value: aggregate, ttl: ttl)
+        // overwrite: true — archive data is authoritative.
         try? await repository?.storeDailyObservations(
-            entries: [(lat: roundedLat, lon: roundedLon, observations: daily)]
+            entries: [(lat: roundedLat, lon: roundedLon, observations: daily)],
+            overwrite: true
         )
         return daily
     }
@@ -311,7 +316,8 @@ struct CachedWeatherClient: WeatherClient {
                     try? await cache.set(key: key, value: aggregate, ttl: ttl)
                     dbEntries.append((lat: coord.latitude, lon: coord.longitude, observations: newObs))
                 }
-                try? await repository?.storeDailyObservations(entries: dbEntries)
+                // overwrite: true — archive data is authoritative.
+                try? await repository?.storeDailyObservations(entries: dbEntries, overwrite: true)
             }
         }
 
@@ -334,7 +340,8 @@ struct CachedWeatherClient: WeatherClient {
                 try? await cache.set(key: key, value: aggregate, ttl: ttl)
                 dbEntries.append((lat: coord.latitude, lon: coord.longitude, observations: daily))
             }
-            try? await repository?.storeDailyObservations(entries: dbEntries)
+            // overwrite: true — archive data is authoritative.
+            try? await repository?.storeDailyObservations(entries: dbEntries, overwrite: true)
         }
 
         return results.map { $0! }

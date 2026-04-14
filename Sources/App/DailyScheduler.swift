@@ -1,5 +1,6 @@
 import Foundation
 import Logging
+import Redis
 import SQLKit
 import Vapor
 
@@ -21,6 +22,7 @@ final class DailyScheduler: LifecycleHandler, @unchecked Sendable {
     private let logger = Logger(label: "funghi.scheduler")
     private var task: Task<Void, Never>?
     private var notificationTask: Task<Void, Never>?
+    private var midnightTask: Task<Void, Never>?
 
     func didBoot(_ app: Application) throws {
         let notifHour   = Environment.get("NOTIFICATION_HOUR").flatMap(Int.init) ?? 12
@@ -32,8 +34,12 @@ final class DailyScheduler: LifecycleHandler, @unchecked Sendable {
         notificationTask = Task { [weak self] in
             await self?.runNotificationLoop(app: app, hour: notifHour, minute: notifMinute)
         }
+        midnightTask = Task { [weak self] in
+            await self?.runMidnightLoop(app: app)
+        }
         logger.info("Daily scheduler started", metadata: [
             "next_pipeline": "\(Self.nextTriggerISO(hour: 2, minute: 45))",
+            "next_midnight_flush": "\(Self.nextTriggerISO(hour: 0, minute: 0))",
             "next_notifications": "\(Self.nextTriggerISO(hour: notifHour, minute: notifMinute))"
         ])
     }
@@ -41,6 +47,7 @@ final class DailyScheduler: LifecycleHandler, @unchecked Sendable {
     func shutdown(_ app: Application) {
         task?.cancel()
         notificationTask?.cancel()
+        midnightTask?.cancel()
         logger.info("Daily scheduler stopped")
     }
 
@@ -59,6 +66,22 @@ final class DailyScheduler: LifecycleHandler, @unchecked Sendable {
         }
     }
 
+    /// Runs at 00:00 Rome time — 2h 45m before the pipeline.
+    /// Flushes stale Redis cache and in-memory raster cache so the 02:45 pipeline
+    /// always fetches fresh forecast data from OpenMeteo and produces up-to-date tiles.
+    private func runMidnightLoop(app: Application) async {
+        while !Task.isCancelled {
+            let delay = Self.secondsUntilNext(hour: 0, minute: 0)
+            logger.info("Midnight cache flush scheduled", metadata: [
+                "next_run": "\(Self.nextTriggerISO(hour: 0, minute: 0))",
+                "in_minutes": "\(delay / 60)"
+            ])
+            do { try await Task.sleep(for: .seconds(delay)) } catch { break }
+            guard !Task.isCancelled else { break }
+            await runMidnightFlush(app: app)
+        }
+    }
+
     private func runNotificationLoop(app: Application, hour: Int, minute: Int) async {
         while !Task.isCancelled {
             let delay = Self.secondsUntilNext(hour: hour, minute: minute)
@@ -70,6 +93,57 @@ final class DailyScheduler: LifecycleHandler, @unchecked Sendable {
             guard !Task.isCancelled else { break }
             await runNotifications(app: app)
         }
+    }
+
+    // MARK: - Midnight cache flush
+
+    /// Runs at 00:00 Rome — 2h 45m before the 02:45 pipeline.
+    ///
+    /// Clears three stale-cache sources so the pipeline always starts fresh:
+    ///
+    /// 1. Redis `forecast_obs:*` keys — forecast observations keyed by baseDate.
+    ///    Deleted so the 02:45 run fetches today's updated forecast from OpenMeteo
+    ///    instead of getting Redis hits from the previous day's 26h-TTL entries.
+    ///    (The keys are date-keyed so they would naturally miss — this is a safety net
+    ///    for any timezone edge cases and ensures a clean OpenMeteo fetch is logged.)
+    ///
+    /// 2. Redis `weather:*` keys — historical weather aggregates, also date-keyed.
+    ///    Keeping yesterday's keys wastes Redis memory; deleting them here is free
+    ///    since the pipeline will re-populate today's keys during the 02:45 run.
+    ///
+    /// 3. In-memory RasterCache — evict all entries so dynamic tile requests after
+    ///    the pipeline regenerate from the freshly written raster.bin files.
+    private func runMidnightFlush(app: Application) async {
+        logger.info("════ Midnight cache flush starting ════")
+
+        // 1 + 2. Flush Redis forecast_obs and weather keys via SCAN + DEL.
+        //        Uses pattern matching — no FLUSHDB, which would also clear auth tokens etc.
+        await step("redis cache flush") {
+            let patterns = ["forecast_obs:*", "weather:*"]
+            for pattern in patterns {
+                var cursor = 0
+                var deleted = 0
+                repeat {
+                    let page = try await app.redis.scan(startingFrom: cursor, matching: pattern, count: 200).get()
+                    cursor = page.0
+                    let keys = page.1.map { RedisKey($0) }
+                    if !keys.isEmpty {
+                        deleted += try await app.redis.delete(keys).get()
+                    }
+                } while cursor != 0
+
+                self.logger.info("Midnight flush — Redis keys deleted", metadata: [
+                    "pattern": "\(pattern)",
+                    "deleted": "\(deleted)"
+                ])
+            }
+        }
+
+        // 3. Evict all in-memory raster entries so dynamic tiles load from fresh disk files.
+        await RasterCache.shared.evictAll()
+        logger.info("Midnight flush — RasterCache evicted")
+
+        logger.info("════ Midnight cache flush complete ════")
     }
 
     // MARK: - Pipeline
@@ -165,6 +239,13 @@ final class DailyScheduler: LifecycleHandler, @unchecked Sendable {
             "date": "\(date)",
             "duration": "\(ContinuousClock.now - runStart)"
         ])
+
+        // Signal host-side cron to purge nginx tile cache.
+        // Storage/logs is a bind-mount shared with the host; the host cron
+        // checks for this file every minute (see Makefile: nginx-cache-cron-install).
+        let sentinelPath = app.directory.workingDirectory + "Storage/logs/.nginx-cache-pending"
+        try? "".write(toFile: sentinelPath, atomically: true, encoding: .utf8)
+        logger.info("Nginx cache purge sentinel written")
     }
 
     /// Runs a labelled step, logging outcome. Failure does not abort subsequent steps.
