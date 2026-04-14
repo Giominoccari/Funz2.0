@@ -49,6 +49,11 @@ logs-live: ## Tail only new log lines (skip history)
 app-logs: ## Tail app logs only
 	$(COMPOSE) logs -f app
 
+tail-logs: ## Stream app stdout into Storage/logs/api.log (run in background: make tail-logs &)
+	@mkdir -p Storage/logs
+	@echo "▶ Streaming docker logs → Storage/logs/api.log (Ctrl-C to stop)"
+	docker logs -f funz-app 2>&1 | tee -a Storage/logs/api.log
+
 # ═══════════════════════════════════════════════════════════════════
 # Build — Docker image management
 # ═══════════════════════════════════════════════════════════════════
