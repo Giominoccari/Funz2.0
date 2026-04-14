@@ -602,6 +602,31 @@ actor PipelineRunner {
             "fromAPI": "\(apiMissIndices.count)"
         ])
 
+        // Persist forecast observations to weather_observations so the API can serve
+        // /weather/daily?from=today&to=today+N with real forecast data.
+        // ON CONFLICT DO NOTHING means re-runs are safe and stale historical data is not overwritten.
+        let forecastEntries: [(lat: Double, lon: Double, observations: [DailyObservation])] = coarsePoints
+            .enumerated()
+            .compactMap { (i, cp) in
+                let obs = forecastByCoord[i]
+                guard !obs.isEmpty else { return nil }
+                return (lat: cp.lat, lon: cp.lon, observations: obs)
+            }
+        if !forecastEntries.isEmpty {
+            do {
+                // Ensure partitions exist for all months that forecast days span
+                let forecastEnd = Self.dateAddDays(baseDate, days)
+                try await histRepo.ensurePartitions(from: baseDate, to: forecastEnd)
+                try await histRepo.storeDailyObservations(entries: forecastEntries)
+                logger.info("Forecast — persisted observations to DB", metadata: [
+                    "coordinates": "\(forecastEntries.count)",
+                    "dateRange": "\(baseDate)–\(forecastEnd)"
+                ])
+            } catch {
+                logger.warning("Forecast — failed to persist observations to DB", metadata: ["error": "\(error)"])
+            }
+        }
+
         // Remove stale forecast directories (dates ≤ baseDate that are no longer future forecasts)
         let forecastRootPath = "Storage/tiles/forecast"
         let dateFmt = DateFormatter()

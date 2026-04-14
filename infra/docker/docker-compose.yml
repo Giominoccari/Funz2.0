@@ -54,6 +54,7 @@ services:
       ADMIN_API_KEY: ${ADMIN_API_KEY:-}
       STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
       STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+      LOG_DIR: ${LOG_DIR:-}
     volumes:
       - ../../Keys:/app/Keys:ro
       - ../../Storage/tiles:/app/Storage/tiles
