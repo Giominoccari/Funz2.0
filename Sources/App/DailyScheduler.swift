@@ -3,53 +3,72 @@ import Logging
 import SQLKit
 import Vapor
 
-/// Runs the full pipeline once per day at 02:45 Europe/Rome, inside the API process.
+/// Runs the map pipeline and push notifications on separate daily schedules.
 /// Registered as a Vapor LifecycleHandler in configure.swift — starts and stops with the app.
 ///
-/// Daily sequence:
+/// Pipeline task — 02:45 Europe/Rome:
 ///   1. Historical map  — today's probability map (scoring + tiles)
 ///   2. Forecast maps   — next 5 days (scoring + tiles)
+///
+/// Notification task — 12:00 Europe/Rome:
 ///   3. Evaluate        — sample POI scores, send APNs push notifications
 ///
 /// Each step is fault-tolerant: failure is logged but does not block subsequent steps.
 ///
-/// @unchecked Sendable safety: `task` is written once in `didBoot` and cancelled in
+/// @unchecked Sendable safety: tasks are written once in `didBoot` and cancelled in
 /// `shutdown`. Both are called serially by Vapor's lifecycle — no concurrent access.
 final class DailyScheduler: LifecycleHandler, @unchecked Sendable {
     private let logger = Logger(label: "funghi.scheduler")
     private var task: Task<Void, Never>?
+    private var notificationTask: Task<Void, Never>?
 
     func didBoot(_ app: Application) throws {
+        let notifHour   = Environment.get("NOTIFICATION_HOUR").flatMap(Int.init) ?? 12
+        let notifMinute = Environment.get("NOTIFICATION_MINUTE").flatMap(Int.init) ?? 0
+
         task = Task { [weak self] in
             await self?.runLoop(app: app)
         }
-        let next = Self.nextTriggerISO()
-        logger.info("Daily scheduler started", metadata: ["next_run": "\(next)"])
+        notificationTask = Task { [weak self] in
+            await self?.runNotificationLoop(app: app, hour: notifHour, minute: notifMinute)
+        }
+        logger.info("Daily scheduler started", metadata: [
+            "next_pipeline": "\(Self.nextTriggerISO(hour: 2, minute: 45))",
+            "next_notifications": "\(Self.nextTriggerISO(hour: notifHour, minute: notifMinute))"
+        ])
     }
 
     func shutdown(_ app: Application) {
         task?.cancel()
+        notificationTask?.cancel()
         logger.info("Daily scheduler stopped")
     }
 
-    // MARK: - Loop
+    // MARK: - Loops
 
     private func runLoop(app: Application) async {
         while !Task.isCancelled {
-            let delay = Self.secondsUntilNextTrigger()
+            let delay = Self.secondsUntilNext(hour: 2, minute: 45)
             logger.info("Daily pipeline scheduled", metadata: [
-                "next_run": "\(Self.nextTriggerISO())",
+                "next_run": "\(Self.nextTriggerISO(hour: 2, minute: 45))",
                 "in_minutes": "\(delay / 60)"
             ])
-
-            do {
-                try await Task.sleep(for: .seconds(delay))
-            } catch {
-                break // Task cancelled
-            }
-
+            do { try await Task.sleep(for: .seconds(delay)) } catch { break }
             guard !Task.isCancelled else { break }
             await runDailyPipeline(app: app)
+        }
+    }
+
+    private func runNotificationLoop(app: Application, hour: Int, minute: Int) async {
+        while !Task.isCancelled {
+            let delay = Self.secondsUntilNext(hour: hour, minute: minute)
+            logger.info("Notification run scheduled", metadata: [
+                "next_run": "\(Self.nextTriggerISO(hour: hour, minute: minute))",
+                "in_minutes": "\(delay / 60)"
+            ])
+            do { try await Task.sleep(for: .seconds(delay)) } catch { break }
+            guard !Task.isCancelled else { break }
+            await runNotifications(app: app)
         }
     }
 
@@ -142,17 +161,6 @@ final class DailyScheduler: LifecycleHandler, @unchecked Sendable {
             )
         }
 
-        // Step 3 — Evaluate forecast scores + push notifications
-        await step("evaluate + notify") {
-            try await ForecastEvaluator.run(
-                db: app.db,
-                httpClient: app.http.client.shared,
-                baseDate: date,
-                days: 5,
-                threshold: 0.45
-            )
-        }
-
         logger.info("════ Daily pipeline complete ════", metadata: [
             "date": "\(date)",
             "duration": "\(ContinuousClock.now - runStart)"
@@ -170,16 +178,33 @@ final class DailyScheduler: LifecycleHandler, @unchecked Sendable {
         }
     }
 
+    // MARK: - Notifications-only run
+
+    private func runNotifications(app: Application) async {
+        let date = Self.todayRomeString()
+        logger.info("════ Notification run starting ════", metadata: ["date": "\(date)"])
+        await step("evaluate + notify") {
+            try await ForecastEvaluator.run(
+                db: app.db,
+                httpClient: app.http.client.shared,
+                baseDate: date,
+                days: 5,
+                threshold: 0.45
+            )
+        }
+        logger.info("════ Notification run complete ════", metadata: ["date": "\(date)"])
+    }
+
     // MARK: - Timing
 
-    /// Seconds from now until 02:45 Europe/Rome (today if in the future, else tomorrow).
-    private static func secondsUntilNextTrigger() -> Int64 {
+    /// Seconds from now until the next occurrence of hour:minute in Europe/Rome.
+    private static func secondsUntilNext(hour: Int, minute: Int) -> Int64 {
         var cal = Calendar(identifier: .gregorian)
         cal.timeZone = TimeZone(identifier: "Europe/Rome")!
         let now = Date()
         var components = cal.dateComponents([.year, .month, .day], from: now)
-        components.hour = 2
-        components.minute = 45
+        components.hour = hour
+        components.minute = minute
         components.second = 0
         guard let todayTrigger = cal.date(from: components) else { return 86400 }
         let target = todayTrigger > now
@@ -188,10 +213,10 @@ final class DailyScheduler: LifecycleHandler, @unchecked Sendable {
         return max(0, Int64(target.timeIntervalSince(now)))
     }
 
-    private static func nextTriggerISO() -> String {
+    private static func nextTriggerISO(hour: Int, minute: Int) -> String {
         let fmt = ISO8601DateFormatter()
         fmt.timeZone = TimeZone(identifier: "Europe/Rome")!
-        return fmt.string(from: Date(timeIntervalSinceNow: Double(secondsUntilNextTrigger())))
+        return fmt.string(from: Date(timeIntervalSinceNow: Double(secondsUntilNext(hour: hour, minute: minute))))
     }
 
     private static func todayRomeString() -> String {

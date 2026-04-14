@@ -76,6 +76,8 @@ func configure(_ app: Application) async throws {
     app.migrations.add(AddDeviceToken())
     app.migrations.add(CreatePOI())
     app.migrations.add(CreatePOINotification())
+    app.migrations.add(AddSentDateToPOINotification())
+    app.migrations.add(AddScoreToPOINotification())
     try await app.autoMigrate()
 
     // Validate PostGIS raster data (Copernicus DEM required for altitude)
