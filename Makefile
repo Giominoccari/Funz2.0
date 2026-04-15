@@ -6,8 +6,9 @@ COMPOSE = docker compose -f infra/docker/docker-compose.yml --env-file .env
 # Load .env into shell (for host-side scripts like db-setup, geodata-import)
 LOAD_ENV = if [ -f .env ]; then while IFS= read -r _line || [ -n "$$_line" ]; do echo "$$_line" | grep -qE '^\s*($$|\#)' && continue; export "$$_line"; done < .env; fi
 
-.PHONY: up down restart status logs app-logs \
+.PHONY: up down restart status logs app-logs tail-logs \
         build rebuild quick \
+        geo-cache-clear \
         db-setup db-shell db-up db-down redis-up redis-down \
         app-up app-down app-restart \
         worker worker-trentino worker-forecast worker-forecast-trentino worker-evaluate \
@@ -49,6 +50,10 @@ logs-live: ## Tail only new log lines (skip history)
 
 app-logs: ## Tail app logs only
 	$(COMPOSE) logs -f app
+
+tail-logs: ## Capture app stdout into Storage/logs/api.log from host (run as: make tail-logs &)
+	@mkdir -p Storage/logs
+	docker logs -f funz-app 2>&1 | tee -a Storage/logs/api.log
 
 tail-logs: ## Stream app stdout into Storage/logs/api.log (run in background: make tail-logs &)
 	@mkdir -p Storage/logs
@@ -166,6 +171,10 @@ geodata-check: ## Verify raster tables exist in PostGIS
 
 redis-flush: ## Flush all Redis data (weather cache etc.)
 	docker exec funz-redis redis-cli FLUSHALL
+
+geo-cache-clear: ## Delete geo enrichment cache (required after GridGenerator changes)
+	docker exec funz-app find /app/.cache -name "geo_*.cache" -delete 2>/dev/null || true
+	@echo "✔ Geo cache cleared"
 
 # ═══════════════════════════════════════════════════════════════════
 # Swift — Native build/test (without Docker)

@@ -142,7 +142,7 @@ struct ScoreRaster: Sendable {
 
         // Sample every 4th cell instead of every cell — still catches any non-empty region
         // since score data has ~500m spacing and tiles cover much larger areas
-        let step = max(1, min((rowEnd - rowStart) / 8, (colEnd - colStart) / 8))
+        let step = max(1, min((rowEnd - rowStart) / 4, (colEnd - colStart) / 4))
         for row in stride(from: rowStart, through: rowEnd, by: step) {
             for col in stride(from: colStart, through: colEnd, by: step) {
                 if data[row * width + col] > 0.001 { return true }

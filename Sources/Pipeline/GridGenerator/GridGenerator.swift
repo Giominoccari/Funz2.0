@@ -13,12 +13,18 @@ struct GridGenerator: Sendable {
         // Latitude step: constant everywhere
         let latStep = (spacing / GridGenerator.earthRadiusMeters) * (180.0 / .pi)
 
+        // Longitude step: fixed at bbox centerLat — must match ScoreRaster's formula exactly.
+        // ScoreRaster places raster columns at fixed lonStep intervals from centerLat; if
+        // GridGenerator used a per-row variable lonStep, points at southern/northern latitudes
+        // would land between raster columns, leaving systematic empty columns every ~7-14 cells
+        // and causing hasData() to incorrectly skip entire tiles (the visible geometric holes).
+        let centerLat = (bbox.minLat + bbox.maxLat) / 2.0
+        let lonStep = latStep / cos(centerLat * .pi / 180.0)
+
         var points: [GridPoint] = []
         var lat = bbox.minLat
 
         while lat <= bbox.maxLat {
-            // Longitude step: varies with latitude (wider at equator, narrower at poles)
-            let lonStep = latStep / cos(lat * .pi / 180.0)
             var lon = bbox.minLon
 
             while lon <= bbox.maxLon {

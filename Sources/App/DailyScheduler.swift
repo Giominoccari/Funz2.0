@@ -212,15 +212,29 @@ final class DailyScheduler: LifecycleHandler, @unchecked Sendable {
 
         // Step 2 — Forecast maps (next 5 days)
         await step("forecast maps") {
+            let weatherRepo = WeatherRepository(db: sqlDb)
             let openMeteo = OpenMeteoClient(
                 httpClient: app.http.client.shared,
                 targetDate: date,
                 config: config.pipeline.weather,
                 responseLogger: responseLogger
             )
+            // Use a real CachedWeatherClient (Redis → DB → OpenMeteo archive) so that
+            // runForecast can fetch 13-day historical observations at the same coarse
+            // coordinates the forecast grid uses. MockWeatherClient was previously used
+            // here but never hits the DB or API — it returned synthetic data that didn't
+            // align with the forecast coarse grid coordinates, so the historical blend
+            // window was always empty and forecast maps had no rain/weather context.
+            let weatherClient: any WeatherClient = CachedWeatherClient(
+                inner: openMeteo,
+                cache: RedisWeatherCache(redis: app.redis),
+                ttl: config.pipeline.weather.cacheTTLSeconds,
+                targetDate: date,
+                repository: weatherRepo
+            )
             let runner = PipelineRunner(
                 config: config.pipeline,
-                weatherClient: MockWeatherClient(bbox: .italy, targetDate: date),
+                weatherClient: weatherClient,
                 geoEnrichmentClient: geoClient,
                 tileUploader: LocalTileUploader()
             )

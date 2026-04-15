@@ -74,9 +74,18 @@ struct WorkerCommand: AsyncCommand {
                 config: config.pipeline.weather
             )
 
+            let forecastWeatherRepo = WeatherRepository(db: sqlDb)
+            let forecastWeatherClient: any WeatherClient = CachedWeatherClient(
+                inner: openMeteoClient,
+                cache: RedisWeatherCache(redis: app.redis),
+                ttl: config.pipeline.weather.cacheTTLSeconds,
+                targetDate: date,
+                repository: forecastWeatherRepo
+            )
+
             let runner = PipelineRunner(
                 config: pipelineConfig,
-                weatherClient: MockWeatherClient(bbox: bbox, targetDate: date), // unused in forecast mode
+                weatherClient: forecastWeatherClient,
                 geoEnrichmentClient: geoClient,
                 tileUploader: LocalTileUploader()
             )

@@ -494,18 +494,22 @@ actor PipelineRunner {
             "finePoints": "\(points.count)"
         ])
 
-        // Fetch historical observations from DB (last 13 days ending today)
-        // Used to fill the look-back window for near-future forecast days.
+        // Fetch historical observations for the last 13 days via weatherClient.
+        // weatherClient is a CachedWeatherClient (Redis → DB → OpenMeteo archive) that uses
+        // the exact same coarse coordinates as the forecast grid — so the DB lookup hits.
+        // Previously this queried the DB directly at forecast coarse coords, which never
+        // matched the DB rows (stored at the archive API's snapped coords, ~0.07° grid),
+        // leaving historicalByIndex always empty and every forecast day rain-window-less.
         let histRepo = WeatherRepository(db: db)
-        let histStart = Self.dateAddDays(baseDate, -13)
         let historicalByIndex: [Int: [DailyObservation]]
         do {
-            historicalByIndex = try await histRepo.fetchExistingDaily(
-                coordinates: coords, from: histStart, to: baseDate
-            )
-            logger.info("Forecast — historical data loaded from DB", metadata: [
-                "from": "\(histStart)",
-                "to": "\(baseDate)",
+            let dailyBatch = try await weatherClient.fetchDailyBatch(coordinates: coords)
+            var byIndex: [Int: [DailyObservation]] = [:]
+            for (i, obs) in dailyBatch.enumerated() where !obs.isEmpty {
+                byIndex[i] = obs
+            }
+            historicalByIndex = byIndex
+            logger.info("Forecast — historical data loaded via weatherClient", metadata: [
                 "coordinatesWithData": "\(historicalByIndex.count)/\(coarsePoints.count)"
             ])
         } catch {
