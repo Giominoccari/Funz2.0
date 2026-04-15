@@ -70,6 +70,7 @@ build: ## Build app Docker image without starting
 
 rebuild: ## Rebuild image and restart app (DB + Redis stay up)
 	$(COMPOSE) build app
+	@docker builder prune --keep-storage 2gb -f > /dev/null
 	$(COMPOSE) up -d app --wait --force-recreate
 	@echo "✔ App rebuilt and restarted"
 

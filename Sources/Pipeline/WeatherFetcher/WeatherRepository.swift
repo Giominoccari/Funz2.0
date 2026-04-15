@@ -184,6 +184,60 @@ actor WeatherRepository {
         let daily: [DailyWeather]
     }
 
+    struct AvailableRange: Sendable {
+        let from: String
+        let to: String
+    }
+
+    /// Returns the oldest and newest observed_date stored near the given coordinates.
+    /// Used by the iOS weather chart to know what date range to request.
+    func fetchAvailableRange(
+        latitude: Double,
+        longitude: Double
+    ) async throws -> AvailableRange? {
+        // Find nearest grid point
+        let nearestRows = try await db.raw("""
+            SELECT latitude, longitude
+            FROM (
+                SELECT DISTINCT latitude, longitude
+                FROM weather_observations
+            ) AS pts
+            ORDER BY (latitude - \(bind: latitude)) * (latitude - \(bind: latitude))
+                   + (longitude - \(bind: longitude)) * (longitude - \(bind: longitude))
+            LIMIT 1
+            """).all()
+
+        guard let nearest = nearestRows.first else { return nil }
+
+        let nearLat = try nearest.decode(column: "latitude", as: Double.self)
+        let nearLon = try nearest.decode(column: "longitude", as: Double.self)
+
+        let dLat = nearLat - latitude
+        let dLon = nearLon - longitude
+        guard dLat * dLat + dLon * dLon <= 0.135 * 0.135 else { return nil }
+
+        let rangeRows = try await db.raw("""
+            SELECT MIN(observed_date) AS min_date, MAX(observed_date) AS max_date
+            FROM weather_observations
+            WHERE latitude = \(bind: nearLat)
+              AND longitude = \(bind: nearLon)
+            """).all()
+
+        guard let row = rangeRows.first else { return nil }
+
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+
+        let minDate = try row.decode(column: "min_date", as: Date.self)
+        let maxDate = try row.decode(column: "max_date", as: Date.self)
+
+        return AvailableRange(
+            from: formatter.string(from: minDate),
+            to: formatter.string(from: maxDate)
+        )
+    }
+
     func fetchForAPI(
         latitude: Double,
         longitude: Double,

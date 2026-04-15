@@ -165,10 +165,10 @@ final class DailyScheduler: LifecycleHandler, @unchecked Sendable {
         let sqlDb = app.db as! any SQLDatabase
         let geoClient = BatchGeoEnrichmentClient(db: sqlDb)
 
-        // Step 0 — Cleanup historical tiles older than 2 days
+        // Step 0 — Cleanup historical tiles older than 1 day (keep only yesterday + today)
         await step("cleanup old tiles") {
             let tilesDir = app.directory.workingDirectory + "Storage/tiles"
-            let cutoff = Self.dateString(daysBack: 2, from: date)
+            let cutoff = Self.dateString(daysBack: 1, from: date)
             let contents = (try? FileManager.default.contentsOfDirectory(atPath: tilesDir)) ?? []
             let fmt = DateFormatter()
             fmt.dateFormat = "yyyy-MM-dd"

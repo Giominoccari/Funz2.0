@@ -229,12 +229,20 @@ struct MapController: RouteCollection, Sendable {
 
         let contents = try FileManager.default.contentsOfDirectory(atPath: tilesDir)
 
-        // Filter to valid date-like directories (YYYY-MM-DD format)
         let dateFormatter = DateFormatter()
         dateFormatter.dateFormat = "yyyy-MM-dd"
+        dateFormatter.timeZone = TimeZone(identifier: "Europe/Rome")
+
+        // Only expose yesterday and today — older tiles are stale and should have been
+        // cleaned up by the scheduler. Filtering here ensures no historical leftovers
+        // leak to clients even if cleanup was skipped (e.g. manual pipeline runs).
+        let today = dateFormatter.string(from: Date())
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(identifier: "Europe/Rome")!
+        let yesterday = dateFormatter.string(from: cal.date(byAdding: .day, value: -1, to: Date())!)
 
         return contents
-            .filter { dateFormatter.date(from: $0) != nil }
+            .filter { dateFormatter.date(from: $0) != nil && ($0 == today || $0 == yesterday) }
             .sorted()
             .reversed()
             .map { $0 }
