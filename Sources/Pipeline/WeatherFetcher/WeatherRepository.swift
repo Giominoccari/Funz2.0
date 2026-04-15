@@ -122,6 +122,16 @@ actor WeatherRepository {
 
     // MARK: - Store new daily observations
 
+    /// Deletes all observations older than `cutoffDate` (exclusive).
+    /// Called during daily cleanup to keep the DB bounded to the scoring window.
+    func deleteObservationsBefore(_ cutoffDate: String) async throws {
+        try await db.raw("""
+            DELETE FROM weather_observations
+            WHERE observed_date < CAST(\(bind: cutoffDate) AS date)
+            """).run()
+        logger.info("Deleted old weather observations", metadata: ["before": "\(cutoffDate)"])
+    }
+
     /// Batch-inserts daily observations.
     ///
     /// - Parameter overwrite: when `true` uses `DO UPDATE SET` so that archive-quality

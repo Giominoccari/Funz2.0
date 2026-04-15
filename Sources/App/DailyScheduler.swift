@@ -165,7 +165,9 @@ final class DailyScheduler: LifecycleHandler, @unchecked Sendable {
         let sqlDb = app.db as! any SQLDatabase
         let geoClient = BatchGeoEnrichmentClient(db: sqlDb)
 
-        // Step 0 — Cleanup historical tiles older than 1 day (keep only yesterday + today)
+        // Step 0 — Cleanup: remove tiles older than yesterday, and DB weather data
+        // older than the 13-day scoring window. Keeps storage bounded and the weather
+        // history chart readable (only shows data actually used in score evaluation).
         await step("cleanup old tiles") {
             let tilesDir = app.directory.workingDirectory + "Storage/tiles"
             let cutoff = Self.dateString(daysBack: 1, from: date)
@@ -177,6 +179,13 @@ final class DailyScheduler: LifecycleHandler, @unchecked Sendable {
                 try FileManager.default.removeItem(atPath: "\(tilesDir)/\(entry)")
                 logger.info("Scheduler — removed old tiles", metadata: ["dir": "\(entry)"])
             }
+        }
+
+        await step("cleanup old weather DB rows") {
+            let weatherRepo = WeatherRepository(db: sqlDb)
+            // Keep 13 days back (the scoring window). Anything older is never used.
+            let dbCutoff = Self.dateString(daysBack: 13, from: date)
+            try await weatherRepo.deleteObservationsBefore(dbCutoff)
         }
 
         // Shared response logger — writes raw Open-Meteo JSON to Storage/logs/openmeteo/{date}/
