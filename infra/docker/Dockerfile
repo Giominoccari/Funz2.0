@@ -18,7 +18,7 @@ RUN swift package resolve
 COPY Sources/ Sources/
 COPY Tests/ Tests/
 
-RUN --mount=type=cache,target=/app/.build \
+RUN --mount=type=cache,target=/app/.build,size=5368709120 \
     swift build -c release \
     --static-swift-stdlib \
     -Xlinker -lstdc++ \
